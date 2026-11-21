@@ -107,7 +107,7 @@ export class SpeechTracker {
     if (this.recognition) {
       try {
         this.recognition.stop();
-      } catch (e) {}
+      } catch {}
     }
 
     if (this.animationFrameId) {

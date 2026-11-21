@@ -1,4 +1,4 @@
-import type { Session } from '../types';
+import type { SavedConversation, Session } from '../types';
 
 const API_BASE = 'http://localhost:3001/api';
 
@@ -21,6 +21,25 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(session)
+    });
+    return !!result?.success;
+  },
+
+  getConversations: () =>
+    request<SavedConversation[]>('/conversations').then((conversations) => conversations ?? []),
+
+  saveConversation: async (conversation: SavedConversation) => {
+    const result = await request<{ success: boolean }>('/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(conversation)
+    });
+    return !!result?.success;
+  },
+
+  deleteConversation: async (conversationId: string) => {
+    const result = await request<{ success: boolean }>(`/conversations/${conversationId}`, {
+      method: 'DELETE'
     });
     return !!result?.success;
   }

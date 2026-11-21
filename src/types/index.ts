@@ -84,3 +84,10 @@ export interface Session {
   deltas?: SessionDelta;
   oneThingToPractice: string;
 }
+
+export interface SavedConversation {
+  id: string;
+  title: string;
+  updatedAt: string;
+  utterances: Utterance[];
+}

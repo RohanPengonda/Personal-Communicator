@@ -15,13 +15,13 @@ const tabs = [
 ];
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => (
-  <header className="sticky top-0 z-50 border-b border-white/10 bg-surface-950/95 backdrop-blur-xl">
-    <div className="max-w-6xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between gap-4">
+  <header className="app-header">
+    <div className="app-header-inner">
       <div className="flex items-center gap-3 shrink-0">
-        <div className="w-9 h-9 rounded-xl bg-emerald-500 flex items-center justify-center">
-          <Mic2 className="w-5 h-5 text-surface-950" />
+        <div className="brand-mark">
+          <Mic2 className="w-5 h-5" />
         </div>
-        <span className="font-extrabold text-white">Communication Coach</span>
+        <span className="brand-name">Communication Coach</span>
       </div>
 
       <nav className="flex items-center gap-1" aria-label="Practice modes">

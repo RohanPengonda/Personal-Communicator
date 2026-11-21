@@ -31,6 +31,44 @@ export interface EvaluationResult {
   oneThingToPractice: string;
 }
 
+export async function generateConversationReply(
+  transcript: string,
+  history: { speaker: string; text: string }[]
+): Promise<string> {
+  if (ai) {
+    try {
+      const prompt = [
+        'You are a warm, thoughtful communication coach having a natural spoken conversation.',
+        'Keep replies to 1-3 short sentences. Ask one relevant follow-up question.',
+        'Conversation history:',
+        ...history.slice(-8).map((item) => `${item.speaker}: ${item.text}`),
+        `User: ${transcript}`
+      ].join('\n');
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt
+      });
+      const reply = response.text?.trim();
+      if (reply) return reply;
+    } catch (error) {
+      console.warn('Gemini conversation reply failed, using local reply:', error);
+    }
+  }
+
+  const text = transcript.toLowerCase();
+  if (/^(hi|hello|hey)\b/.test(text)) {
+    return 'Hello. What would you like to talk about today?';
+  }
+  if (/\b(stress|anxious|nervous|worried)\b/.test(text)) {
+    return 'That sounds difficult. What happened just before you started feeling that way?';
+  }
+  if (/\b(work|job|team|project|manager)\b/.test(text)) {
+    return 'What part of that situation felt most important to you?';
+  }
+  return 'I understand. Could you tell me a little more about what happened and how you handled it?';
+}
+
 export async function evaluateSession(input: EvaluationInput): Promise<EvaluationResult> {
   // If Gemini API is available, invoke Gemini model
   if (ai) {

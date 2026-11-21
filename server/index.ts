@@ -78,6 +78,56 @@ app.post('/api/sessions', async (req, res) => {
   }
 });
 
+app.get('/api/conversations', async (_req, res) => {
+  try {
+    const database = await getDb();
+    const rows = await database.all(
+      'SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 50'
+    );
+    res.json(rows.map((row: any) => ({
+      id: row.id,
+      title: row.title,
+      updatedAt: row.updated_at,
+      utterances: JSON.parse(row.utterances_json)
+    })));
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.post('/api/conversations', async (req, res) => {
+  try {
+    const conversation = req.body;
+    const database = await getDb();
+    await database.run(`
+      INSERT INTO conversations (id, title, updated_at, utterances_json)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        updated_at = excluded.updated_at,
+        utterances_json = excluded.utterances_json
+    `, [
+      conversation.id,
+      conversation.title,
+      conversation.updatedAt,
+      JSON.stringify(conversation.utterances)
+    ]);
+    res.json({ success: true, id: conversation.id });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.delete('/api/conversations/:id', async (req, res) => {
+  try {
+    const database = await getDb();
+    await database.run('DELETE FROM conversations WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Communication Coach API listening on port ${PORT}`);
 });

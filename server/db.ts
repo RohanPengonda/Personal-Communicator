@@ -38,11 +38,12 @@ export async function initDatabase() {
   `);
 
   await db.exec(`
-    DROP TABLE IF EXISTS user_profile;
-    DROP TABLE IF EXISTS daily_activity;
-    DROP TABLE IF EXISTS monthly_reports;
-    DROP TABLE IF EXISTS story_bank;
-    DELETE FROM sessions
-    WHERE mode NOT IN ('LIVE_COACH', 'CONVERSATION', 'INTERVIEW');
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      utterances_json TEXT NOT NULL
+    );
   `);
+
 }

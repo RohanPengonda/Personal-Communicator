@@ -19,7 +19,6 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   const [volume, setVolume] = useState(0);
   const [paceWpm, setPaceWpm] = useState(0);
   const [fillerCount, setFillerCount] = useState(0);
-  const [lastFiller, setLastFiller] = useState('');
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
@@ -30,11 +29,13 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
 
   // Initialize Camera MediaStream
   useEffect(() => {
+    const video = videoRef.current;
+
     async function setupCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+        if (video) {
+          video.srcObject = stream;
         }
         setCameraActive(true);
       } catch (err) {
@@ -44,8 +45,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     setupCamera();
 
     return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
+      if (video && video.srcObject) {
+        const stream = video.srcObject as MediaStream;
         stream.getTracks().forEach((track) => track.stop());
       }
     };
@@ -66,9 +67,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
       },
       onVolumeChange: (vol) => setVolume(vol),
       onPaceUpdate: (wpm) => setPaceWpm(wpm),
-      onFillerDetected: (count, word) => {
+      onFillerDetected: (count, _word) => {
         setFillerCount(count);
-        setLastFiller(word);
       }
     });
 
@@ -107,7 +107,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     const attemptNum = previousAttemptSession ? previousAttemptSession.attemptNumber + 1 : 1;
 
     const newSession: Session = {
-      id: `sess-${Date.now()}`,
+      id: `sess-${crypto.randomUUID()}`,
       timestamp: new Date().toISOString(),
       mode: 'LIVE_COACH',
       modeLabel: 'Live Coach Session',
@@ -144,157 +144,66 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   };
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      
-      {/* Top Title Banner */}
-      <div className="glass-panel p-6 rounded-2xl border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="practice-layout">
+      <header className="practice-header">
         <div>
-          <div className="flex items-center space-x-2 text-emerald-400 font-bold text-xs uppercase tracking-wider">
-            <Video className="w-4 h-4" />
-            <span>Live Coach</span>
-          </div>
-          <h2 className="text-2xl font-extrabold text-white mt-1">
-            Real-Time Visual & Voice Coaching HUD
-          </h2>
-          <p className="text-xs text-slate-300 mt-1">
-            Speak naturally into camera and mic. AI observes speaking pace, filler spikes, and hook engagement with subtle feedback.
-          </p>
+          <p className="eyebrow">Live Coach</p>
+          <h1>Speak with clarity</h1>
+          <p>Use your camera and microphone while the coach measures pace and clarity.</p>
         </div>
-
-        {/* Recording Timer */}
-        <div className="flex items-center space-x-3 bg-surface-900/90 p-3 rounded-xl border border-white/10 shrink-0">
-          <div className="w-3 h-3 rounded-full bg-rose-500 animate-ping" />
-          <span className="font-mono text-xl font-bold text-white">{formatTimer(timerSeconds)}</span>
+        <div className="timer-card">
+          <span className={isRecording ? 'live-dot is-live' : 'live-dot'} />
+          <strong>{formatTimer(timerSeconds)}</strong>
         </div>
-      </div>
+      </header>
 
-      {/* Main Layout Grid: Camera View + Live HUD HUD */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Camera View Subpanel */}
-        <div className="lg:col-span-7 glass-panel p-4 rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center min-h-[380px] bg-slate-950">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover rounded-xl border border-white/10 transform -scale-x-100"
-          />
-
+      <div className="live-grid">
+        <div className="camera-card">
+          <video ref={videoRef} autoPlay playsInline muted />
           {!cameraActive && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-surface-950/90">
-              <Video className="w-12 h-12 text-slate-500 mb-2 animate-bounce" />
-              <p className="text-sm font-bold text-white">Camera Preview Placeholder</p>
-              <p className="text-xs text-slate-400">Allow camera permission in browser to view live feedback</p>
+            <div className="camera-empty">
+              <Video className="w-8 h-8" />
+              <strong>Camera not available</strong>
+              <span>Allow camera and microphone access to begin.</span>
             </div>
           )}
-
-          {/* Subtle Real-Time Warning Pills Overlay */}
           {isRecording && (
-            <div className="absolute top-6 left-6 right-6 flex items-center justify-between pointer-events-none">
-              
-              {/* Pace Pill */}
-              <div className="bg-surface-950/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-xs font-bold text-emerald-400 flex items-center space-x-1.5">
-                <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Pace: {paceWpm || 140} WPM</span>
-              </div>
-
-              {/* Filler Alert Pill */}
-              {fillerCount > 0 && (
-                <div className="bg-rose-950/90 backdrop-blur-md px-3 py-1.5 rounded-full border border-rose-500/40 text-xs font-bold text-rose-300 flex items-center space-x-1.5 animate-bounce">
-                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Filler Spike: "{lastFiller}" ({fillerCount})</span>
-                </div>
-              )}
-
-              {/* Eye Contact Indicator */}
-              <div className="bg-surface-950/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-xs font-bold text-cyan-300 flex items-center space-x-1.5">
-                <Eye className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Lens Engagement: Good</span>
-              </div>
+            <div className="live-metrics">
+              <span><Activity className="w-4 h-4" /> {paceWpm || 140} WPM</span>
+              {fillerCount > 0 && <span><AlertCircle className="w-4 h-4" /> {fillerCount} fillers</span>}
+              <span><Eye className="w-4 h-4" /> Lens</span>
             </div>
           )}
         </div>
 
-        {/* Right Side Live Real-Time Telemetry */}
-        <div className="lg:col-span-5 glass-panel p-6 rounded-2xl border border-white/10 flex flex-col justify-between space-y-4">
-          
-          <div className="space-y-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider border-b border-white/10 pb-2">
-              Live Speech Telemetry
-            </h3>
-
-            {/* Audio Volume Visualizer Bar */}
-            <div>
-              <div className="flex justify-between text-xs text-slate-400 font-semibold mb-1">
-                <span>Audio Stream Input</span>
-                <span>{volume}%</span>
-              </div>
-              <div className="w-full bg-slate-900 h-3 rounded-full overflow-hidden p-0.5 border border-white/5">
-                <div 
-                  className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 transition-all duration-75"
-                  style={{ width: `${volume}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Filler Counter Gauge */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-surface-900/80 p-3 rounded-xl border border-white/5">
-                <span className="text-[11px] text-slate-400 uppercase font-semibold">Filler Words</span>
-                <p className="text-2xl font-extrabold text-amber-400 mt-0.5">{fillerCount}</p>
-              </div>
-
-              <div className="bg-surface-900/80 p-3 rounded-xl border border-white/5">
-                <span className="text-[11px] text-slate-400 uppercase font-semibold">Pace Target</span>
-                <p className="text-2xl font-extrabold text-emerald-400 mt-0.5">
-                  {paceWpm || 140} <span className="text-xs text-slate-400">WPM</span>
-                </p>
-              </div>
-            </div>
-
-            {/* Live Transcript Stream */}
-            <div className="bg-slate-950 p-4 rounded-xl border border-white/5 space-y-1 h-36 overflow-y-auto">
-              <span className="text-[11px] text-slate-400 uppercase font-semibold block">Live Speech Stream</span>
-              <p className="text-xs text-slate-200 leading-relaxed font-mono">
-                {transcript} <span className="text-emerald-400 underline">{interimText}</span>
-              </p>
-            </div>
-          </div>
-
-          {/* Action Control Button */}
+        <aside className="coach-panel">
           <div>
-            {!isRecording ? (
-              <button
-                onClick={handleStartRecording}
-                disabled={isAnalyzing}
-                className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-surface-950 font-extrabold text-base shadow-xl shadow-emerald-500/25 transition-all flex items-center justify-center space-x-2"
-              >
-                <Mic className="w-5 h-5" />
-                <span>Start Live Session</span>
-              </button>
-            ) : (
-              <button
-                onClick={handleStopRecording}
-                className="w-full py-4 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-base shadow-xl shadow-rose-500/30 transition-all flex items-center justify-center space-x-2 animate-pulse"
-              >
-                <Square className="w-5 h-5" />
-                <span>Stop & Generate Audit</span>
-              </button>
-            )}
-
-            {isAnalyzing && (
-              <div className="mt-3 flex items-center justify-center space-x-2 text-emerald-400 text-xs font-semibold">
-                <Sparkles className="w-4 h-4 animate-spin" />
-                <span>Gemini AI Analyzing Communication Performance...</span>
-              </div>
-            )}
+            <p className="eyebrow">Live telemetry</p>
+            <div className="volume-row">
+              <span>Audio input</span><strong>{volume}%</strong>
+            </div>
+            <div className="volume-track"><div style={{ width: `${volume}%` }} /></div>
+            <div className="stat-grid">
+              <div><span>Filler words</span><strong>{fillerCount}</strong></div>
+              <div><span>Speaking pace</span><strong>{paceWpm || 140}</strong></div>
+            </div>
+            <div className="live-transcript">
+              <span>Live transcript</span>
+              <p>{transcript} <mark>{interimText}</mark></p>
+            </div>
           </div>
-
-        </div>
-
+          {!isRecording ? (
+            <button onClick={handleStartRecording} disabled={isAnalyzing} className="primary-action">
+              <Mic className="w-5 h-5" /> Start session
+            </button>
+          ) : (
+            <button onClick={handleStopRecording} className="stop-action">
+              <Square className="w-5 h-5" /> Finish & analyze
+            </button>
+          )}
+          {isAnalyzing && <p className="analyzing"><Sparkles className="w-4 h-4" /> Analyzing</p>}
+        </aside>
       </div>
-
     </div>
   );
 };

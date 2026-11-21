@@ -22,7 +22,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-surface-950 text-slate-100 flex flex-col font-sans">
+    <div className="app-shell">
       <Navbar activeTab={activeTab} setActiveTab={selectTab} />
 
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 lg:px-8 py-6">
@@ -41,9 +41,6 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="border-t border-white/5 py-4 text-center text-xs text-slate-500">
-        Communication Coach
-      </footer>
     </div>
   );
 };
