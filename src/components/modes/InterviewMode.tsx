@@ -83,7 +83,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
       <div className="glass-card-accent p-6 rounded-2xl border border-emerald-500/30">
         <div className="flex items-center space-x-2 text-emerald-400 font-bold text-xs uppercase">
           <Award className="w-4 h-4" />
-          <span>Mode E — Behavioral & Technical Interview Simulator</span>
+          <span>Interview Practice</span>
         </div>
         <h2 className="text-2xl font-extrabold text-white mt-1">High-Stakes Interview Practice</h2>
       </div>

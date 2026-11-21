@@ -1,14 +1,6 @@
-export type TrainingMode = 
-  | 'LIVE_COACH'
-  | 'STORYTELLING'
-  | 'PUBLIC_SPEAKING'
-  | 'INTERVIEW'
-  | 'SPONTANEOUS'
-  | 'EXPLAIN_SIMPLY'
-  | 'CONVERSATION'
-  | 'DAILY_WORKOUT';
+export type TrainingMode = 'LIVE_COACH' | 'CONVERSATION' | 'INTERVIEW';
 
-export type MarkerType = 
+export type MarkerType =
   | 'STRONG_OPENING'
   | 'FILLER_SPIKE'
   | 'LOST_CLARITY'
@@ -17,7 +9,7 @@ export type MarkerType =
   | 'STRONG_ENDING';
 
 export interface CommunicationMetrics {
-  overall: number; // 0.0 - 10.0
+  overall: number;
   storytelling: number;
   clarity: number;
   engagement: number;
@@ -45,7 +37,7 @@ export interface SessionReplayMarker {
 
 export interface WhyCoachingCard {
   id: string;
-  category: 'STORYTELLING' | 'WIT' | 'PUBLIC_SPEAKING' | 'COMMUNICATION';
+  category: 'COMMUNICATION';
   observation: string;
   impact: string;
   principle: string;
@@ -91,84 +83,4 @@ export interface Session {
   previousAttemptId?: string;
   deltas?: SessionDelta;
   oneThingToPractice: string;
-}
-
-export interface StoryBankItem {
-  id: string;
-  title: string;
-  rawVersion: string;
-  polishedVersion: string;
-  coreConflict: string;
-  turningPoint: string;
-  lesson: string;
-  themes: string[];
-  emotions: string[];
-  interviewUseCases: string[];
-  practiceCount: number;
-  lastPracticedAt: string;
-}
-
-export interface DailyActivity {
-  date: string; // YYYY-MM-DD
-  minutesPracticed: number;
-  sessionsCount: number;
-  exercisesCount: number;
-  dailyScore: number;
-  bestMoment: string;
-  focusArea: string;
-}
-
-export interface CategoryScore {
-  category: string;
-  score: number;
-  change: number;
-}
-
-export interface MonthlyReport {
-  yearMonth: string; // e.g. "2026-09"
-  monthName: string; // e.g. "September 2026"
-  overallScore: number;
-  scoreChange: number;
-  categoryScores: CategoryScore[];
-  biggestImprovement: string;
-  biggestWeakness: string;
-  recurringHabit: string;
-  nextMonthFocus: string;
-}
-
-export interface UserProfile {
-  name: string;
-  currentOverallScore: number;
-  startingScore: number;
-  strongestSkill: string;
-  biggestImprovement: string;
-  currentWeakness: string;
-  recurringPattern: string;
-  naturalStrength: string;
-  developingSkill: string;
-  currentFocus: string;
-  recommendedNextStep: string;
-  streakDays: number;
-  totalSessions: number;
-  totalPracticeMinutes: number;
-  totalStoriesPracticed: number;
-  practiceConsistencyPct: number;
-}
-
-export interface WorkoutStep {
-  stepNumber: number;
-  title: string;
-  mode: TrainingMode;
-  prompt: string;
-  targetDurationSeconds: number;
-  completed: boolean;
-  score?: number;
-}
-
-export interface DailyWorkout {
-  id: string;
-  title: string;
-  totalEstimatedMinutes: number;
-  steps: WorkoutStep[];
-  currentStepIndex: number;
 }

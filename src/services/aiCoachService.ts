@@ -88,7 +88,7 @@ Return ONLY a raw JSON object with this exact structure:
   "whyCoaching": [
     {
       "id": "w1",
-      "category": "STORYTELLING",
+      "category": "COMMUNICATION",
       "observation": "What happened in user transcript",
       "impact": "Why it hurt engagement",
       "principle": "Underlying communication principle",
@@ -134,16 +134,9 @@ function generateIntelligentMockEvaluation(input: EvaluationInput): EvaluationRe
   let confidence = 7.2;
   let conciseness = 7.5;
 
-  if (input.mode === 'STORYTELLING') {
-    storytelling = transcript.length > 120 ? 8.1 : 6.5;
-    if (transcript.toLowerCase().includes('suddenly') || transcript.toLowerCase().includes('turning point') || transcript.toLowerCase().includes('realized')) {
-      storytelling += 0.6;
-    }
-  } else if (input.mode === 'INTERVIEW') {
+  if (input.mode === 'INTERVIEW') {
     conciseness = fillerCount < 3 ? 8.4 : 6.8;
     clarity = 8.2;
-  } else if (input.mode === 'EXPLAIN_SIMPLY') {
-    clarity = transcript.toLowerCase().includes('like') || transcript.toLowerCase().includes('imagine') ? 8.7 : 7.0;
   }
 
   // Deduct for excess fillers
@@ -192,7 +185,7 @@ function generateIntelligentMockEvaluation(input: EvaluationInput): EvaluationRe
   const whyCoaching: WhyCoachingCard[] = [
     {
       id: 'w-1',
-      category: 'STORYTELLING',
+      category: 'COMMUNICATION',
       observation: 'You explained the background setup for 25 seconds before introducing the core conflict.',
       impact: 'The human brain tunes out when given raw context without a reason to care.',
       principle: 'Curiosity before context. Ignite the spark first, then supply the fuel.',
@@ -200,7 +193,7 @@ function generateIntelligentMockEvaluation(input: EvaluationInput): EvaluationRe
     },
     {
       id: 'w-2',
-      category: 'WIT',
+      category: 'COMMUNICATION',
       observation: 'You delivered the resolution with purely technical terms without tension release.',
       impact: 'The listener feels informed, but not personally connected or entertained.',
       principle: 'Contrast creates wit. Juxtaposing high technical stakes with everyday human moments creates natural lightness.',
@@ -208,9 +201,11 @@ function generateIntelligentMockEvaluation(input: EvaluationInput): EvaluationRe
     }
   ];
 
-  const oneThingToPractice = input.mode === 'STORYTELLING' 
-    ? 'State the core conflict within the first 15 seconds before explaining the backstory.' 
-    : 'Lead with your main point immediately, then unpack the supporting evidence.';
+  const oneThingToPractice = input.mode === 'INTERVIEW'
+    ? 'Answer with a specific result and explain the action you personally took.'
+    : input.mode === 'CONVERSATION'
+      ? 'Ask one relevant follow-up question before sharing your own perspective.'
+      : 'Lead with your main point immediately, then unpack the supporting evidence.';
 
   const result: EvaluationResult = {
     score: overall,

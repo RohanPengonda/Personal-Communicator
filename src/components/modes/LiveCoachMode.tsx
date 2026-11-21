@@ -151,7 +151,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
         <div>
           <div className="flex items-center space-x-2 text-emerald-400 font-bold text-xs uppercase tracking-wider">
             <Video className="w-4 h-4" />
-            <span>Mode A — Live Coach</span>
+            <span>Live Coach</span>
           </div>
           <h2 className="text-2xl font-extrabold text-white mt-1">
             Real-Time Visual & Voice Coaching HUD

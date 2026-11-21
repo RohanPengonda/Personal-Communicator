@@ -13,7 +13,7 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
       id: 'u-0',
       speaker: 'AI',
       timestamp: '00:00',
-      text: "Hey Rohan! What interesting technical or personal project have you been working on lately?"
+      text: "What interesting project or topic would you like to discuss today?"
     }
   ]);
 
@@ -86,7 +86,7 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
         <div>
           <div className="flex items-center space-x-2 text-indigo-400 font-bold text-xs uppercase">
             <MessageSquare className="w-4 h-4" />
-            <span>Mode B — Conversation Mode</span>
+            <span>Conversation Practice</span>
           </div>
           <h2 className="text-2xl font-extrabold text-white mt-1">Natural Conversational Flow Partner</h2>
         </div>
