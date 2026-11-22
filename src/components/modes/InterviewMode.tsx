@@ -4,7 +4,7 @@ import { SpeechTracker } from '../../services/speechService';
 import { evaluateSession } from '../../services/aiCoachService';
 import { SessionRecorder } from '../../services/recordingService';
 import { api } from '../../services/api';
-import { Award, Video } from 'lucide-react';
+import { Award, Video, Mic } from 'lucide-react';
 
 interface Props {
   onSessionComplete: (session: Session) => void;
@@ -22,6 +22,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
   const [transcript, setTranscript] = useState('');
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [cameraActive, setCameraActive] = useState(false);
+  const [volume, setVolume] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -55,6 +56,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
   const handleStart = async () => {
     setTranscript('');
     setTimerSeconds(0);
+    setVolume(0);
     setIsRecording(true);
 
     if (streamRef.current) {
@@ -64,7 +66,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
 
     const tracker = new SpeechTracker({
       onTranscriptUpdate: (full, interim) => setTranscript((full + ' ' + interim).trim()),
-      onVolumeChange: () => {},
+      onVolumeChange: (level) => setVolume(level),
       onPaceUpdate: () => {},
       onFillerDetected: () => {}
     });
@@ -154,10 +156,15 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
                 <span>Allow camera and microphone access to record your answer.</span>
               </div>
             )}
+            <div className="live-metrics">
+              <span>
+                <Mic className="w-4 h-4" />
+                {cameraActive ? (isRecording ? `Mic ${volume}%` : 'Mic ready') : 'Mic unavailable'}
+              </span>
+              {isRecording && <span className="recording-badge">Recording</span>}
+            </div>
             {isRecording && (
-              <div className="live-metrics">
-                <span className="recording-badge">Recording</span>
-              </div>
+              <div className="interview-mic-track"><div style={{ width: `${volume}%` }} /></div>
             )}
           </div>
           <div className="answer-top">
