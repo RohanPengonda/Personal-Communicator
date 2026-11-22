@@ -3,6 +3,7 @@ import type { Session, TrainingMode } from './types';
 import { Navbar, type ActiveTab } from './components/layout/Navbar';
 import { ModesHub } from './components/modes/ModesHub';
 import { SessionComplete } from './components/session/SessionComplete';
+import { SessionHistory } from './components/session/SessionHistory';
 import { api } from './services/api';
 
 export const App: React.FC = () => {
@@ -13,7 +14,7 @@ export const App: React.FC = () => {
   const selectTab = (tab: ActiveTab) => {
     setCompletedSession(null);
     setActiveTab(tab);
-    setActiveMode(tab);
+    setActiveMode(tab === 'HISTORY' ? null : tab);
   };
 
   const handleSessionComplete = async (session: Session) => {
@@ -26,7 +27,9 @@ export const App: React.FC = () => {
       <Navbar activeTab={activeTab} setActiveTab={selectTab} />
 
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 lg:px-8 py-6">
-        {completedSession ? (
+        {activeTab === 'HISTORY' ? (
+          <SessionHistory onPractice={(mode) => selectTab(mode)} />
+        ) : completedSession ? (
           <SessionComplete
             session={completedSession}
             onRetry={() => setCompletedSession(null)}

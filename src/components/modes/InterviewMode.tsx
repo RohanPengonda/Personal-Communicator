@@ -1,8 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { Session, TrainingMode } from '../../types';
 import { SpeechTracker } from '../../services/speechService';
 import { evaluateSession } from '../../services/aiCoachService';
-import { Award } from 'lucide-react';
+import { SessionRecorder } from '../../services/recordingService';
+import { api } from '../../services/api';
+import { Award, Video } from 'lucide-react';
 
 interface Props {
   onSessionComplete: (session: Session) => void;
@@ -19,14 +21,46 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [timerSeconds, setTimerSeconds] = useState(0);
+  const [cameraActive, setCameraActive] = useState(false);
 
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<SessionRecorder | null>(null);
   const trackerRef = useRef<SpeechTracker | null>(null);
   const timerRef = useRef<any>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+
+    async function setupCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        streamRef.current = stream;
+        if (video) video.srcObject = stream;
+        setCameraActive(true);
+      } catch (err) {
+        console.warn('Camera access denied or unavailable:', err);
+      }
+    }
+    setupCamera();
+
+    return () => {
+      if (video && video.srcObject) {
+        (video.srcObject as MediaStream).getTracks().forEach((track) => track.stop());
+      }
+      streamRef.current = null;
+    };
+  }, []);
 
   const handleStart = async () => {
     setTranscript('');
     setTimerSeconds(0);
     setIsRecording(true);
+
+    if (streamRef.current) {
+      const recorder = new SessionRecorder();
+      if (recorder.start(streamRef.current)) recorderRef.current = recorder;
+    }
 
     const tracker = new SpeechTracker({
       onTranscriptUpdate: (full, interim) => setTranscript((full + ' ' + interim).trim()),
@@ -36,7 +70,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
     });
 
     trackerRef.current = tracker;
-    await tracker.start();
+    await tracker.start(streamRef.current ?? undefined);
 
     timerRef.current = setInterval(() => setTimerSeconds((p) => p + 1), 1000);
   };
@@ -45,6 +79,8 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
     setIsRecording(false);
     if (timerRef.current) clearInterval(timerRef.current);
     if (trackerRef.current) trackerRef.current.stop();
+    const recordingPromise = recorderRef.current?.stop() ?? Promise.resolve(null);
+    const sessionId = `sess-${crypto.randomUUID()}`;
 
     const finalTranscript = transcript || "I bring a track record of taking complex technical problems and shipping clear, high-impact products rapidly.";
 
@@ -55,8 +91,11 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
       durationSeconds: Math.max(10, timerSeconds)
     });
 
+    const recording = await recordingPromise;
+    const mediaUrl = recording ? (await api.uploadRecording(sessionId, recording)) ?? undefined : undefined;
+
     const newSession: Session = {
-      id: `sess-${crypto.randomUUID()}`,
+      id: sessionId,
       timestamp: new Date().toISOString(),
       mode: 'INTERVIEW',
       modeLabel: 'Interview Simulator',
@@ -72,7 +111,8 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
       replays: evalResult.replays,
       whyCoaching: evalResult.whyCoaching,
       attemptNumber: 1,
-      oneThingToPractice: evalResult.oneThingToPractice
+      oneThingToPractice: evalResult.oneThingToPractice,
+      mediaUrl
     };
 
     onSessionComplete(newSession);
@@ -84,7 +124,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
         <div>
           <p className="eyebrow">Interview</p>
           <h1>Practice a focused answer</h1>
-          <p>Choose a question, record your response, and receive a concise evaluation.</p>
+          <p>Choose a question, record your answer on camera, and review where you can improve.</p>
         </div>
         <Award className="practice-header-icon" />
       </header>
@@ -104,7 +144,22 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete }) => {
           ))}
         </aside>
 
-        <section className="answer-card">
+        <section className="answer-card interview-answer">
+          <div className="camera-card interview-camera">
+            <video ref={videoRef} autoPlay playsInline muted />
+            {!cameraActive && (
+              <div className="camera-empty">
+                <Video className="w-8 h-8" />
+                <strong>Camera not available</strong>
+                <span>Allow camera and microphone access to record your answer.</span>
+              </div>
+            )}
+            {isRecording && (
+              <div className="live-metrics">
+                <span className="recording-badge">Recording</span>
+              </div>
+            )}
+          </div>
           <div className="answer-top">
             <p>{selectedQuestion}</p>
             <div className="answer-time">

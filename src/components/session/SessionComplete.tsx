@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import type { Session } from '../../types';
 import { RotateCcw, CheckCircle2, Target } from 'lucide-react';
 
@@ -14,6 +14,19 @@ export const SessionComplete: React.FC<SessionCompleteProps> = ({
   onDone
 }) => {
   const metrics = session.metrics;
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const seekTo = (seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = seconds;
+    void video.play().catch(() => {});
+  };
+
+  const formatTime = (seconds: number) => {
+    const value = Math.max(0, Math.round(seconds));
+    return `${Math.floor(value / 60).toString().padStart(2, '0')}:${(value % 60).toString().padStart(2, '0')}`;
+  };
 
   return (
     <div className="result-layout">
@@ -29,6 +42,25 @@ export const SessionComplete: React.FC<SessionCompleteProps> = ({
           <small>/ 10</small>
         </div>
       </header>
+
+      {session.mediaUrl && (
+        <section className="result-replay">
+          <video ref={videoRef} controls src={session.mediaUrl} />
+          {session.replays.length > 0 && (
+            <div className="result-replay-markers">
+              <p className="eyebrow">Jump to a moment</p>
+              <div>
+                {session.replays.map((marker) => (
+                  <button key={marker.id} onClick={() => seekTo(marker.timestampSeconds)}>
+                    <span>{formatTime(marker.timestampSeconds)}</span>
+                    <strong>{marker.label}</strong>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="result-focus">
         <div className="result-focus-icon"><Target className="w-5 h-5" /></div>

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { Session, TrainingMode } from '../../types';
 import { SpeechTracker } from '../../services/speechService';
 import { evaluateSession } from '../../services/aiCoachService';
+import { SessionRecorder } from '../../services/recordingService';
+import { api } from '../../services/api';
 import { Video, Mic, Square, Sparkles, Activity, AlertCircle, Eye } from 'lucide-react';
 
 interface LiveCoachModeProps {
@@ -24,6 +26,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   const [cameraActive, setCameraActive] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<SessionRecorder | null>(null);
   const speechTrackerRef = useRef<SpeechTracker | null>(null);
   const timerRef = useRef<any>(null);
 
@@ -34,6 +38,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     async function setupCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        streamRef.current = stream;
         if (video) {
           video.srcObject = stream;
         }
@@ -49,6 +54,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
         const stream = video.srcObject as MediaStream;
         stream.getTracks().forEach((track) => track.stop());
       }
+      streamRef.current = null;
     };
   }, []);
 
@@ -59,6 +65,11 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     setPaceWpm(0);
     setTimerSeconds(0);
     setIsRecording(true);
+
+    if (streamRef.current) {
+      const recorder = new SessionRecorder();
+      if (recorder.start(streamRef.current)) recorderRef.current = recorder;
+    }
 
     const tracker = new SpeechTracker({
       onTranscriptUpdate: (full, interim) => {
@@ -73,7 +84,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     });
 
     speechTrackerRef.current = tracker;
-    await tracker.start();
+    await tracker.start(streamRef.current ?? undefined);
 
     timerRef.current = setInterval(() => {
       setTimerSeconds((prev) => prev + 1);
@@ -87,6 +98,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     if (speechTrackerRef.current) {
       speechTrackerRef.current.stop();
     }
+    const recordingPromise = recorderRef.current?.stop() ?? Promise.resolve(null);
+    const sessionId = `sess-${crypto.randomUUID()}`;
 
     setIsAnalyzing(true);
 
@@ -103,11 +116,13 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     };
 
     const evalResult = await evaluateSession(evalInput);
+    const recording = await recordingPromise;
+    const mediaUrl = recording ? (await api.uploadRecording(sessionId, recording)) ?? undefined : undefined;
 
     const attemptNum = previousAttemptSession ? previousAttemptSession.attemptNumber + 1 : 1;
 
     const newSession: Session = {
-      id: `sess-${crypto.randomUUID()}`,
+      id: sessionId,
       timestamp: new Date().toISOString(),
       mode: 'LIVE_COACH',
       modeLabel: 'Live Coach Session',
@@ -130,7 +145,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
       attemptNumber: attemptNum,
       previousAttemptId: previousAttemptSession?.id,
       deltas: evalResult.deltas,
-      oneThingToPractice: evalResult.oneThingToPractice
+      oneThingToPractice: evalResult.oneThingToPractice,
+      mediaUrl
     };
 
     setIsAnalyzing(false);

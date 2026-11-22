@@ -33,9 +33,16 @@ export async function initDatabase() {
       attempt_number INTEGER DEFAULT 1,
       previous_attempt_id TEXT,
       deltas_json TEXT,
-      one_thing_to_practice TEXT NOT NULL
+      one_thing_to_practice TEXT NOT NULL,
+      media_url TEXT
     );
   `);
+
+  // Existing databases were created before recordings were supported.
+  const columns = await db.all('PRAGMA table_info(sessions)');
+  if (!columns.some((column: any) => column.name === 'media_url')) {
+    await db.exec('ALTER TABLE sessions ADD COLUMN media_url TEXT');
+  }
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (

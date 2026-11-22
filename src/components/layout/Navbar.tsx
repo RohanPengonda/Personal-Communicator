@@ -1,7 +1,7 @@
 import React from 'react';
-import { MessageSquare, Mic2, BriefcaseBusiness } from 'lucide-react';
+import { MessageSquare, Mic2, BriefcaseBusiness, History } from 'lucide-react';
 
-export type ActiveTab = 'LIVE_COACH' | 'CONVERSATION' | 'INTERVIEW';
+export type ActiveTab = 'LIVE_COACH' | 'CONVERSATION' | 'INTERVIEW' | 'HISTORY';
 
 interface NavbarProps {
   activeTab: ActiveTab;
@@ -11,7 +11,8 @@ interface NavbarProps {
 const tabs = [
   { id: 'LIVE_COACH' as const, label: 'Live Coach', icon: Mic2 },
   { id: 'CONVERSATION' as const, label: 'Conversation', icon: MessageSquare },
-  { id: 'INTERVIEW' as const, label: 'Interview', icon: BriefcaseBusiness }
+  { id: 'INTERVIEW' as const, label: 'Interview', icon: BriefcaseBusiness },
+  { id: 'HISTORY' as const, label: 'History', icon: History }
 ];
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab }) => (

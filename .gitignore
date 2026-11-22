@@ -27,6 +27,9 @@ communication_agent.db-wal
 *.db-shm
 *.db-wal
 
+# Session video/audio recordings uploaded to the local API
+recordings/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

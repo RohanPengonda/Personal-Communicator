@@ -83,6 +83,7 @@ export interface Session {
   previousAttemptId?: string;
   deltas?: SessionDelta;
   oneThingToPractice: string;
+  mediaUrl?: string;
 }
 
 export interface SavedConversation {

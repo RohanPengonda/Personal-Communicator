@@ -1,15 +1,23 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import { mkdir, writeFile } from 'fs/promises';
 import { getDb, initDatabase } from './db.ts';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const recordingsDir = path.resolve(process.cwd(), 'recordings');
 
 app.use(cors());
 app.use(express.json());
+
+mkdir(recordingsDir, { recursive: true }).catch((error) => {
+  console.error('Could not create recordings directory:', error);
+});
+app.use('/recordings', express.static(recordingsDir));
 
 initDatabase().catch((error) => {
   console.error('Database initialization failed:', error);
@@ -36,7 +44,8 @@ app.get('/api/sessions', async (_req, res) => {
       attemptNumber: row.attempt_number,
       previousAttemptId: row.previous_attempt_id,
       deltas: row.deltas_json ? JSON.parse(row.deltas_json) : undefined,
-      oneThingToPractice: row.one_thing_to_practice
+      oneThingToPractice: row.one_thing_to_practice,
+      mediaUrl: row.media_url || undefined
     })));
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -51,8 +60,8 @@ app.post('/api/sessions', async (req, res) => {
       INSERT INTO sessions (
         id, timestamp, mode, mode_label, duration_seconds, context_prompt, target_audience,
         transcript, score, utterances_json, metrics_json, replays_json, why_coaching_json,
-        attempt_number, previous_attempt_id, deltas_json, one_thing_to_practice
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        attempt_number, previous_attempt_id, deltas_json, one_thing_to_practice, media_url
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       session.id,
       session.timestamp,
@@ -70,13 +79,42 @@ app.post('/api/sessions', async (req, res) => {
       session.attemptNumber || 1,
       session.previousAttemptId || null,
       session.deltas ? JSON.stringify(session.deltas) : null,
-      session.oneThingToPractice
+      session.oneThingToPractice,
+      session.mediaUrl || null
     ]);
     res.json({ success: true, id: session.id });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
 });
+
+app.post(
+  '/api/recordings/:id',
+  express.raw({ type: ['video/*', 'audio/*', 'application/octet-stream'], limit: '200mb' }),
+  async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!/^[a-zA-Z0-9_-]+$/.test(id) || !Buffer.isBuffer(req.body)) {
+        res.status(400).json({ error: 'Invalid recording payload' });
+        return;
+      }
+
+      const contentType = req.headers['content-type'] || 'video/webm';
+      const extension = contentType.includes('mp4') ? 'mp4' : 'webm';
+      const filename = `${id}.${extension}`;
+
+      await mkdir(recordingsDir, { recursive: true });
+      await writeFile(path.join(recordingsDir, filename), req.body);
+
+      res.json({
+        success: true,
+        url: `${req.protocol}://${req.get('host')}/recordings/${filename}`
+      });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  }
+);
 
 app.get('/api/conversations', async (_req, res) => {
   try {

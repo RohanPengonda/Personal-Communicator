@@ -16,6 +16,18 @@ async function request<T>(path: string, options?: RequestInit): Promise<T | null
 export const api = {
   getSessions: () => request<Session[]>('/sessions').then((sessions) => sessions ?? []),
 
+  uploadRecording: async (sessionId: string, blob: Blob) => {
+    const result = await request<{ success: boolean; url: string }>(
+      `/recordings/${encodeURIComponent(sessionId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'video/webm' },
+        body: blob
+      }
+    );
+    return result?.url ?? null;
+  },
+
   saveSession: async (session: Session) => {
     const result = await request<{ success: boolean }>('/sessions', {
       method: 'POST',
