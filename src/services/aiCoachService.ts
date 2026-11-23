@@ -63,7 +63,13 @@ export async function generateConversationReply(
 function localFallback(input: EvaluationInput): EvaluationResult {
   const wordCount = input.transcript.split(/\s+/).filter(Boolean).length;
   const fillerCount = (input.transcript.match(/\b(um|uh|like|basically|you know)\b/gi) || []).length;
-  const score = Math.max(1, Math.min(10, 7.5 - fillerCount * 0.3));
+  const fillerRate = (fillerCount / Math.max(1, wordCount)) * 100;
+  const wpm = input.durationSeconds ? Math.round((wordCount / input.durationSeconds) * 60) : 135;
+  const round1 = (value: number) => Math.round(value * 10) / 10;
+  const clamp = (value: number) => Math.max(1, Math.min(10, value));
+  const score = round1(clamp(
+    6.0 + Math.min(1.2, wordCount / 50) - Math.min(2.6, fillerRate * 1.1) - (wpm > 190 ? 1 : 0)
+  ));
   const first = input.wordTimings?.[0]?.start ?? 0;
   const last = input.wordTimings?.[input.wordTimings.length - 1]?.end ?? input.durationSeconds;
 
@@ -82,7 +88,7 @@ function localFallback(input: EvaluationInput): EvaluationResult {
       audienceAdaptation: score,
       explanationQuality: score,
       fillerWordsCount: fillerCount,
-      speakingPaceWPM: input.durationSeconds ? Math.round((wordCount / input.durationSeconds) * 60) : 135,
+      speakingPaceWPM: wpm,
       responseRelevance: score
     },
     replays: [

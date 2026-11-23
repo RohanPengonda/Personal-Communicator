@@ -32,6 +32,18 @@ export interface EvaluationResult {
   source: 'AI' | 'MOCK';
 }
 
+// Same prompt + same seed + temperature 0 = same score on every run, so the
+// Progress trend reflects real improvement instead of model variance.
+const DETERMINISTIC_CONFIG = {
+  temperature: 0,
+  topP: 1,
+  topK: 1,
+  seed: 20240101
+} as const;
+
+const clamp = (value: number, min = 1, max = 10) => Math.max(min, Math.min(max, value));
+const round1 = (value: number) => Math.round(value * 10) / 10;
+
 const normalize = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -143,7 +155,8 @@ Return ONLY a raw JSON object with this exact structure:
 
   const response = await ai!.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: prompt
+    contents: prompt,
+    config: DETERMINISTIC_CONFIG
   });
   const text = response.text || '';
   const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -155,59 +168,83 @@ Return ONLY a raw JSON object with this exact structure:
   return { ...parsed, source: 'AI' as const };
 }
 
+// Deterministic heuristic scoring. Every number comes from measurable signals
+// in this transcript, so re-evaluating the same answer gives the same score and
+// weak/strong answers land far apart instead of clustering around 7.x.
 function generateIntelligentMockEvaluation(input: EvaluationInput): EvaluationResult {
   const transcript = input.transcript || '';
-  const wordCount = transcript.split(/\s+/).filter(Boolean).length;
-  const fillerRegex = /\b(um|uh|like|basically|you know|sort of|kind of|i mean|honestly)\b/gi;
+  const words = transcript.split(/\s+/).map((word) => word.toLowerCase()).filter(Boolean);
+  const wordCount = words.length;
+  const fillerRegex = /\b(um|uh|like|basically|you know|sort of|kind of|i mean|honestly|actually)\b/gi;
   const fillerCount = (transcript.match(fillerRegex) || []).length;
+  const fillerRate = (fillerCount / Math.max(1, wordCount)) * 100;
   const wpm = input.durationSeconds > 0 ? Math.round((wordCount / input.durationSeconds) * 60) : 135;
 
-  let storytelling = 7.2;
-  let clarity = 7.8;
-  let engagement = 7.0;
-  let wit = 6.0;
-  let confidence = 7.2;
-  let conciseness = 7.5;
+  const sentences = transcript.split(/[.!?]+/).map((part) => part.trim()).filter(Boolean);
+  const longSentences = sentences.filter((sentence) => sentence.split(/\s+/).length > 30).length;
+  const longSentenceRatio = longSentences / Math.max(1, sentences.length);
+  const uniqueRatio = new Set(words).size / Math.max(1, wordCount);
+  const repeatedPairs = words.slice(1).filter((word, index) => word === words[index]).length;
 
-  if (input.mode === 'INTERVIEW') {
-    conciseness = fillerCount < 3 ? 8.4 : 6.8;
-    clarity = 8.2;
-  }
-  if (fillerCount > 4) {
-    clarity -= 0.6;
-    confidence -= 0.8;
-  }
+  const hedgeCount = (transcript.match(/\b(maybe|perhaps|i think|i guess|probably|somewhat|i suppose)\b/gi) || []).length;
+  const questionCount = (transcript.match(/\?/g) || []).length;
+  const structureCount = (transcript.match(/\b(first|second|then|next|finally|in conclusion|because|however|for example|so)\b/gi) || []).length;
+  const specificityCount = (transcript.match(/\b(\d+%?|\$\d+|increased|reduced|saved|shipped|launched|delivered|improved|achieved|grew|cut|built|led)\b/gi) || []).length;
 
-  const overall = parseFloat(
-    ((storytelling + clarity + engagement + confidence + conciseness) / 5).toFixed(1)
-  );
+  const fillerPenalty = Math.min(2.6, fillerRate * 1.1);
+  const hedgePenalty = Math.min(1.2, hedgeCount * 0.3);
+  const runOnPenalty = Math.min(1.6, longSentenceRatio * 7);
+  const repetitionPenalty = Math.min(1, repeatedPairs * 0.35);
+
+  const specificityBonus = Math.min(1.8, specificityCount * 0.35);
+  const structureBonus = Math.min(1.2, structureCount * 0.22);
+  const questionBonus = Math.min(1, questionCount * 0.5);
+  const diversityBonus = (uniqueRatio - 0.45) * 3;
+  const paceBonus = wpm >= 120 && wpm <= 165 ? 0.5 : wpm < 90 ? -0.8 : wpm > 190 ? -1 : 0;
+  const lengthBonus = wordCount >= 60 ? 0.4 : wordCount < 20 ? -1 : 0;
+
+  const overall = round1(clamp(
+    6.0 + specificityBonus + structureBonus + questionBonus + diversityBonus + paceBonus + lengthBonus
+    - fillerPenalty - hedgePenalty - runOnPenalty - repetitionPenalty
+  ));
+
+  const clarity = round1(clamp(overall - fillerPenalty * 0.5 + structureBonus * 0.4 + 0.2));
+  const confidence = round1(clamp(overall - hedgePenalty * 1.4 + 0.3));
+  const engagement = round1(clamp(overall + questionBonus * 0.8 - runOnPenalty * 0.3));
+  const storytelling = round1(clamp(overall + specificityBonus * 0.3 - (input.mode === 'INTERVIEW' ? 0.6 : 0)));
+  const conciseness = round1(clamp(overall - runOnPenalty * 0.7 + (input.mode === 'INTERVIEW' ? 0.3 : 0)));
+  const structure = round1(clamp(overall + structureBonus * 0.8));
 
   const replays: SessionReplayMarker[] = [
     {
       id: 'm-1',
       timestampSeconds: Math.min(8, Math.round(input.durationSeconds * 0.1)),
-      label: fillerCount > 2 ? 'Filler Word Start' : 'Clean Opening Hook',
-      type: fillerCount > 2 ? 'FILLER_SPIKE' : 'STRONG_OPENING',
-      textSnippet: transcript.slice(0, 45) + '...',
-      advice: fillerCount > 2
-        ? 'Pause silently for 1 second before speaking to eliminate default fillers.'
+      label: fillerCount > 0 ? 'Filler Word Start' : 'Clean Opening Hook',
+      type: fillerCount > 0 ? 'FILLER_SPIKE' : 'STRONG_OPENING',
+      textSnippet: (fillerCount > 0 ? transcript.match(new RegExp(fillerRegex.source, 'i'))?.[0] : transcript.slice(0, 45)) || transcript.slice(0, 45),
+      advice: fillerCount > 0
+        ? `You used ${fillerCount} filler${fillerCount === 1 ? '' : 's'} (${fillerRate.toFixed(1)} per 100 words). Pause silently for one beat instead.`
         : 'Crisp start. You created immediate curiosity without unnecessary setup.'
     },
     {
       id: 'm-2',
       timestampSeconds: Math.round(input.durationSeconds * 0.45),
-      label: 'Core Explanation & Tension',
-      type: 'EXCELLENT_ANALOGY',
+      label: longSentences > 0 ? 'Run-on Explanation' : 'Core Explanation',
+      type: longSentences > 0 ? 'LOST_CLARITY' : 'EXCELLENT_ANALOGY',
       textSnippet: transcript.slice(Math.round(transcript.length * 0.3), Math.round(transcript.length * 0.6)) || 'Core explanation point...',
-      advice: 'Strong relational comparison here. It makes abstract concepts tangible.'
+      advice: longSentences > 0
+        ? `${longSentences} sentence${longSentences === 1 ? '' : 's'} ran past 30 words. Split the longest one in two.`
+        : 'Clear relational explanation. It makes abstract ideas tangible.'
     },
     {
       id: 'm-3',
       timestampSeconds: Math.round(input.durationSeconds * 0.75),
-      label: 'Wit & Playful Reframing Opportunity',
-      type: 'MISSED_WIT',
+      label: specificityCount === 0 ? 'Missing Concrete Proof' : 'Specific Result',
+      type: specificityCount === 0 ? 'MISSED_WIT' : 'EXCELLENT_ANALOGY',
       textSnippet: transcript.slice(Math.round(transcript.length * 0.6), Math.round(transcript.length * 0.85)) || 'Transition section...',
-      advice: 'You stated a serious conclusion flatly. A light, unexpected contrast would increase audience warmth.'
+      advice: specificityCount === 0
+        ? 'No numbers or results yet. Add one measurable outcome to make the point stick.'
+        : `${specificityCount} concrete detail${specificityCount === 1 ? '' : 's'} here land well. Keep naming real outcomes.`
     },
     {
       id: 'm-4',
@@ -215,52 +252,89 @@ function generateIntelligentMockEvaluation(input: EvaluationInput): EvaluationRe
       label: 'Final Takeaway & Ending',
       type: 'STRONG_ENDING',
       textSnippet: transcript.slice(-50) || 'Final conclusion phrase.',
-      advice: 'Resonant ending. Make sure your vocal pitch doesn’t drop off sharply on the final word.'
+      advice: 'Finish with one clear takeaway and avoid dropping your vocal pitch on the last word.'
     }
   ];
 
-  const whyCoaching: WhyCoachingCard[] = [
-    {
-      id: 'w-1',
+  const whyCoaching: WhyCoachingCard[] = [];
+  if (fillerRate > 2) {
+    whyCoaching.push({
+      id: 'w-fillers',
       category: 'COMMUNICATION',
-      observation: 'You explained the background setup for 25 seconds before introducing the core conflict.',
-      impact: 'The human brain tunes out when given raw context without a reason to care.',
-      principle: 'Curiosity before context. Ignite the spark first, then supply the fuel.',
-      exemplarReframing: 'Instead of: "In 2023 we had a project with 5 microservices...", start with: "We were 10 minutes away from demoing to 50 executives when our main database flatlined."'
-    },
-    {
-      id: 'w-2',
+      observation: `You used ${fillerCount} filler words in ${wordCount} words (${fillerRate.toFixed(1)} per 100).`,
+      impact: 'Fillers signal searching for words and reduce perceived authority.',
+      principle: 'Silence is a punctuation mark. A one-second pause reads as confidence.',
+      exemplarReframing: 'Instead of: "Um, basically we, uh, shipped it", say: "We shipped it."'
+    });
+  }
+  if (longSentenceRatio > 0.15) {
+    whyCoaching.push({
+      id: 'w-runon',
       category: 'COMMUNICATION',
-      observation: 'You delivered the resolution with purely technical terms without tension release.',
-      impact: 'The listener feels informed, but not personally connected or entertained.',
-      principle: 'Contrast creates wit. Juxtaposing high technical stakes with everyday human moments creates natural lightness.',
-      exemplarReframing: 'Instead of: "We restored from cold backup", say: "While the server restored, I drank enough coffee to fuel a rocket launch to Mars."'
-    }
-  ];
+      observation: `${longSentences} of ${sentences.length} sentences ran past 30 words.`,
+      impact: 'Listeners lose the thread before the conclusion arrives.',
+      principle: 'One idea per sentence. Let the period do the work.',
+      exemplarReframing: 'Split the longest sentence at its first "and" into two shorter statements.'
+    });
+  }
+  if (specificityCount === 0) {
+    whyCoaching.push({
+      id: 'w-specifics',
+      category: 'COMMUNICATION',
+      observation: 'The answer contains no numbers, results, or concrete outcomes.',
+      impact: 'Vague claims are forgettable and hard to verify.',
+      principle: 'Specificity is credibility. Name a number, a time, or a result.',
+      exemplarReframing: 'Instead of: "We improved performance", say: "We cut p95 latency from 900ms to 240ms."'
+    });
+  }
+  if (hedgeCount > 1) {
+    whyCoaching.push({
+      id: 'w-hedges',
+      category: 'COMMUNICATION',
+      observation: `You hedged ${hedgeCount} times with phrases like "I think" or "maybe".`,
+      impact: 'Hedging makes a clear point sound tentative.',
+      principle: 'State the claim, then qualify the evidence — not the other way around.',
+      exemplarReframing: 'Instead of: "I think it might work", say: "It works. Here is the evidence."'
+    });
+  }
+  if (whyCoaching.length === 0) {
+    whyCoaching.push({
+      id: 'w-strong',
+      category: 'COMMUNICATION',
+      observation: `Your answer used ${specificityCount} concrete detail${specificityCount === 1 ? '' : 's'} and ${structureCount} signpost${structureCount === 1 ? '' : 's'} with very few fillers.`,
+      impact: 'The listener can follow and remember your point.',
+      principle: 'Clarity compounds. Keep leading with the point and supporting it with specifics.',
+      exemplarReframing: 'Next step: add one short story so the detail becomes memorable.'
+    });
+  }
 
-  const oneThingToPractice = input.mode === 'INTERVIEW'
-    ? 'Answer with a specific result and explain the action you personally took.'
-    : input.mode === 'CONVERSATION'
-      ? 'Ask one relevant follow-up question before sharing your own perspective.'
-      : 'Lead with your main point immediately, then unpack the supporting evidence.';
+  const oneThingToPractice = fillerRate > 2
+    ? 'Replace your next filler with a one-second silent pause.'
+    : longSentenceRatio > 0.15
+      ? 'Split your longest sentence into two shorter ones.'
+      : specificityCount === 0
+        ? 'Add one number or concrete result to your answer.'
+        : hedgeCount > 1
+          ? 'Remove "I think" and "maybe" and state the point directly.'
+          : 'Keep leading with the main point, then add one specific example.';
 
   const result: EvaluationResult = {
     score: overall,
     metrics: {
       overall,
-      storytelling: parseFloat(storytelling.toFixed(1)),
-      clarity: parseFloat(clarity.toFixed(1)),
-      engagement: parseFloat(engagement.toFixed(1)),
-      confidence: parseFloat(confidence.toFixed(1)),
-      wit: parseFloat(wit.toFixed(1)),
-      spontaneity: 7.4,
-      conciseness: parseFloat(conciseness.toFixed(1)),
-      structure: 8.0,
-      audienceAdaptation: 7.6,
-      explanationQuality: 8.1,
+      storytelling,
+      clarity,
+      engagement,
+      confidence,
+      wit: round1(clamp(overall - 1)),
+      spontaneity: round1(clamp(overall - hedgePenalty * 0.5 + 0.2)),
+      conciseness,
+      structure,
+      audienceAdaptation: round1(clamp(overall + questionBonus * 0.6 - hedgePenalty * 0.3)),
+      explanationQuality: round1(clamp(overall + specificityBonus * 0.5 + structureBonus * 0.3)),
       fillerWordsCount: fillerCount,
       speakingPaceWPM: wpm,
-      responseRelevance: 8.8
+      responseRelevance: round1(clamp(overall + specificityBonus * 0.2))
     },
     replays,
     whyCoaching,
@@ -307,7 +381,11 @@ export async function generateConversationReply(
         ...history.slice(-8).map((item) => `${item.speaker}: ${item.text}`),
         `User: ${transcript}`
       ].join('\n');
-      const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: DETERMINISTIC_CONFIG
+      });
       const reply = response.text?.trim();
       if (reply) return reply;
     } catch (error) {

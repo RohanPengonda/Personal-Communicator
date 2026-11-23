@@ -57,6 +57,8 @@ Open the **History** tab to replay a past session, jump to a coaching marker, an
 
 The **Progress** tab shows your score trend, average metric scores, and attempt-to-attempt changes. When you practice a mode again, the app links your new attempt to the previous one and computes real score/metric deltas. Coaching markers are aligned to word timings from local transcription, so marker buttons jump to the exact moment an issue happened. Results show whether feedback came from Gemini AI or the local mock engine, and sessions with no detected speech are rejected instead of being scored against placeholder text.
 
+Scoring is deterministic: Gemini calls use temperature 0 with a fixed seed, and the local mock engine derives every metric from measurable transcript signals (filler rate, sentence length, specificity, structure, pace, lexical diversity). Re-evaluating the same answer produces the same score, and weak vs strong answers spread across the 1–10 range instead of clustering near 7.
+
 Recordings older than `RECORDING_RETENTION_DAYS` (default 30, set to 0 to disable) are removed automatically on server start and after uploads; transcripts and scores are kept. History shows current storage usage with a manual cleanup button.
 
 Allow camera and microphone access, and keep `npm run server` running so recordings can be saved and played back.
