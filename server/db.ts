@@ -34,14 +34,22 @@ export async function initDatabase() {
       previous_attempt_id TEXT,
       deltas_json TEXT,
       one_thing_to_practice TEXT NOT NULL,
-      media_url TEXT
+      media_url TEXT,
+      evaluation_source TEXT,
+      word_timings_json TEXT
     );
   `);
 
-  // Existing databases were created before recordings were supported.
+  // Existing databases were created before these columns were supported.
   const columns = await db.all('PRAGMA table_info(sessions)');
   if (!columns.some((column: any) => column.name === 'media_url')) {
     await db.exec('ALTER TABLE sessions ADD COLUMN media_url TEXT');
+  }
+  if (!columns.some((column: any) => column.name === 'evaluation_source')) {
+    await db.exec('ALTER TABLE sessions ADD COLUMN evaluation_source TEXT');
+  }
+  if (!columns.some((column: any) => column.name === 'word_timings_json')) {
+    await db.exec('ALTER TABLE sessions ADD COLUMN word_timings_json TEXT');
   }
 
   await db.exec(`

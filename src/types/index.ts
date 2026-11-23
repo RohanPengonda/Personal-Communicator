@@ -25,6 +25,17 @@ export interface CommunicationMetrics {
   responseRelevance: number;
 }
 
+export interface WordTiming {
+  word: string;
+  start: number;
+  end: number;
+}
+
+export interface TranscriptionResult {
+  text: string;
+  wordTimings: WordTiming[];
+}
+
 export interface SessionReplayMarker {
   id: string;
   timestampSeconds: number;
@@ -84,6 +95,8 @@ export interface Session {
   deltas?: SessionDelta;
   oneThingToPractice: string;
   mediaUrl?: string;
+  evaluationSource?: 'AI' | 'MOCK';
+  wordTimings?: WordTiming[];
 }
 
 export interface SavedConversation {

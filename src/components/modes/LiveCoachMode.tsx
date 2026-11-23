@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { Session, TrainingMode } from '../../types';
+import type { Session, TrainingMode, WordTiming } from '../../types';
 import { SpeechTracker } from '../../services/speechService';
 import { evaluateSession } from '../../services/aiCoachService';
 import { SessionRecorder } from '../../services/recordingService';
@@ -9,11 +9,13 @@ import { Video, Mic, Square, Sparkles, Activity, AlertCircle, Eye } from 'lucide
 interface LiveCoachModeProps {
   onSessionComplete: (session: Session) => void;
   previousAttemptSession?: Session | null;
+  offlineMode: boolean;
 }
 
 export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   onSessionComplete,
-  previousAttemptSession
+  previousAttemptSession,
+  offlineMode
 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -24,6 +26,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
+  const [noSpeech, setNoSpeech] = useState(false);
+  const [transcriptionError, setTranscriptionError] = useState('');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -64,6 +68,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     setFillerCount(0);
     setPaceWpm(0);
     setTimerSeconds(0);
+    setNoSpeech(false);
+    setTranscriptionError('');
     setIsRecording(true);
 
     if (streamRef.current) {
@@ -71,20 +77,22 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
       if (recorder.start(streamRef.current)) recorderRef.current = recorder;
     }
 
-    const tracker = new SpeechTracker({
-      onTranscriptUpdate: (full, interim) => {
-        setTranscript(full);
-        setInterimText(interim);
-      },
-      onVolumeChange: (vol) => setVolume(vol),
-      onPaceUpdate: (wpm) => setPaceWpm(wpm),
-      onFillerDetected: (count, _word) => {
-        setFillerCount(count);
-      }
-    });
+    if (!offlineMode) {
+      const tracker = new SpeechTracker({
+        onTranscriptUpdate: (full, interim) => {
+          setTranscript(full);
+          setInterimText(interim);
+        },
+        onVolumeChange: (vol) => setVolume(vol),
+        onPaceUpdate: (wpm) => setPaceWpm(wpm),
+        onFillerDetected: (count, _word) => {
+          setFillerCount(count);
+        }
+      });
 
-    speechTrackerRef.current = tracker;
-    await tracker.start(streamRef.current ?? undefined);
+      speechTrackerRef.current = tracker;
+      await tracker.start(streamRef.current ?? undefined);
+    }
 
     timerRef.current = setInterval(() => {
       setTimerSeconds((prev) => prev + 1);
@@ -98,13 +106,33 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     if (speechTrackerRef.current) {
       speechTrackerRef.current.stop();
     }
-    const recordingPromise = recorderRef.current?.stop() ?? Promise.resolve(null);
+    const recording = await (recorderRef.current?.stop() ?? Promise.resolve(null));
     const sessionId = `sess-${crypto.randomUUID()}`;
 
-    setIsAnalyzing(true);
+    let finalTranscript = (transcript + ' ' + interimText).trim();
+    let wordTimings: WordTiming[] = [];
 
-    const finalTranscript = (transcript + ' ' + interimText).trim() || 
-      "I was presenting our product architectural roadmap to our engineering team and focused on explaining vector search clearly.";
+    if (offlineMode) {
+      if (!recording) {
+        setTranscriptionError('No audio was recorded. Check your microphone and try again.');
+        return;
+      }
+      try {
+        const transcription = await api.transcribeAudio(recording);
+        finalTranscript = transcription.text.trim();
+        wordTimings = transcription.wordTimings;
+      } catch {
+        setTranscriptionError('Local transcription unavailable. Start your Whisper service and try again.');
+        return;
+      }
+    }
+
+    if (!finalTranscript) {
+      setNoSpeech(true);
+      return;
+    }
+
+    setIsAnalyzing(true);
 
     const evalInput = {
       mode: 'LIVE_COACH' as TrainingMode,
@@ -112,11 +140,11 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
       targetAudience: 'General Audience',
       transcript: finalTranscript,
       durationSeconds: Math.max(10, timerSeconds),
+      wordTimings,
       previousAttemptSession
     };
 
     const evalResult = await evaluateSession(evalInput);
-    const recording = await recordingPromise;
     const mediaUrl = recording ? (await api.uploadRecording(sessionId, recording)) ?? undefined : undefined;
 
     const attemptNum = previousAttemptSession ? previousAttemptSession.attemptNumber + 1 : 1;
@@ -146,7 +174,9 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
       previousAttemptId: previousAttemptSession?.id,
       deltas: evalResult.deltas,
       oneThingToPractice: evalResult.oneThingToPractice,
-      mediaUrl
+      mediaUrl,
+      evaluationSource: evalResult.source,
+      wordTimings
     };
 
     setIsAnalyzing(false);
@@ -204,8 +234,12 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
               <div><span>Speaking pace</span><strong>{paceWpm || 140}</strong></div>
             </div>
             <div className="live-transcript">
-              <span>Live transcript</span>
-              <p>{transcript} <mark>{interimText}</mark></p>
+              <span>{offlineMode ? 'Local transcription' : 'Live transcript'}</span>
+              <p>
+                {offlineMode
+                  ? 'Offline mode: your transcript and real coaching markers appear after you finish.'
+                  : <>{transcript} <mark>{interimText}</mark></>}
+              </p>
             </div>
           </div>
           {!isRecording ? (
@@ -218,6 +252,18 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
             </button>
           )}
           {isAnalyzing && <p className="analyzing"><Sparkles className="w-4 h-4" /> Analyzing</p>}
+          {noSpeech && (
+            <div className="no-speech">
+              <AlertCircle className="w-4 h-4" />
+              <span>No speech detected. Nothing was analyzed — press start to try again.</span>
+            </div>
+          )}
+          {transcriptionError && (
+            <div className="no-speech">
+              <AlertCircle className="w-4 h-4" />
+              <span>{transcriptionError}</span>
+            </div>
+          )}
         </aside>
       </div>
     </div>

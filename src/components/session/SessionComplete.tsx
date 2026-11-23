@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import type { Session } from '../../types';
-import { RotateCcw, CheckCircle2, Target } from 'lucide-react';
+import { RotateCcw, CheckCircle2, Target, Download, FileText, FileJson } from 'lucide-react';
+import { exportRecording, exportSessionJson, exportTranscript } from '../../services/exportService';
 
 interface SessionCompleteProps {
   session: Session;
@@ -35,6 +36,13 @@ export const SessionComplete: React.FC<SessionCompleteProps> = ({
           <p className="eyebrow">Session complete</p>
           <h1>{session.modeLabel}</h1>
           <p>{session.contextPrompt}</p>
+          {session.evaluationSource && (
+            <span
+              className={session.evaluationSource === 'AI' ? 'source-badge source-ai' : 'source-badge source-mock'}
+            >
+              {session.evaluationSource === 'AI' ? 'Gemini AI feedback' : 'Local mock feedback'}
+            </span>
+          )}
         </div>
         <div className="result-score">
           <span>Overall</span>
@@ -102,11 +110,29 @@ export const SessionComplete: React.FC<SessionCompleteProps> = ({
       )}
 
       <footer className="result-actions">
-        <button onClick={onDone} className="secondary-button">Done</button>
-        <button onClick={onRetry} className="primary-action">
-          <RotateCcw className="w-4 h-4" />
-          Try again
-        </button>
+        <div className="result-export">
+          {session.mediaUrl && (
+            <button
+              onClick={() => void exportRecording(session).catch(() => alert('Could not download the video.'))}
+              className="secondary-button"
+            >
+              <Download className="w-4 h-4" /> Video
+            </button>
+          )}
+          <button onClick={() => exportTranscript(session)} className="secondary-button">
+            <FileText className="w-4 h-4" /> Transcript
+          </button>
+          <button onClick={() => exportSessionJson(session)} className="secondary-button">
+            <FileJson className="w-4 h-4" /> JSON
+          </button>
+        </div>
+        <div className="result-action-buttons">
+          <button onClick={onDone} className="secondary-button">Done</button>
+          <button onClick={onRetry} className="primary-action">
+            <RotateCcw className="w-4 h-4" />
+            Try again
+          </button>
+        </div>
       </footer>
     </div>
   );

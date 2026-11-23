@@ -2,23 +2,26 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { SavedConversation, Session, TrainingMode, Utterance } from '../../types';
 import { evaluateSession, generateConversationReply } from '../../services/aiCoachService';
 import { api } from '../../services/api';
+import { SessionRecorder } from '../../services/recordingService';
 import { History, Mic, MicOff, Send, Plus, Trash2 } from 'lucide-react';
 
 interface Props {
   onSessionComplete: (session: Session) => void;
+  previousAttemptSession?: Session | null;
+  offlineMode: boolean;
 }
 
 const createId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
-const INITIAL_MESSAGE: Utterance = {
+const createInitialMessage = (): Utterance => ({
   id: 'welcome',
   speaker: 'AI',
   timestamp: new Date().toISOString(),
   text: 'Hello. What would you like to talk about today?'
-};
+});
 
-export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
-  const [utterances, setUtterances] = useState<Utterance[]>([INITIAL_MESSAGE]);
+export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousAttemptSession, offlineMode }) => {
+  const [utterances, setUtterances] = useState<Utterance[]>(() => [createInitialMessage()]);
   const [currentText, setCurrentText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
@@ -27,6 +30,8 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
   const [conversationId, setConversationId] = useState(() => `conversation-${crypto.randomUUID()}`);
   const [showHistory, setShowHistory] = useState(false);
   const recognitionRef = useRef<any>(null);
+  const recorderRef = useRef<SessionRecorder | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
   const voiceEnabledRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -40,6 +45,7 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
 
   useEffect(() => () => {
     recognitionRef.current?.stop();
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
     window.speechSynthesis?.cancel();
   }, []);
 
@@ -106,7 +112,42 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
     speak(reply);
   };
 
-  const startListening = () => {
+  const stopOfflineListening = async () => {
+    setIsListening(false);
+    const recording = await (recorderRef.current?.stop() ?? Promise.resolve(null));
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+    if (recording) {
+      try {
+        const transcription = await api.transcribeAudio(recording);
+        if (transcription.text.trim()) void sendMessage(transcription.text.trim());
+      } catch {
+        alert('Local transcription unavailable. Start your Whisper service and try again.');
+      }
+    }
+  };
+
+  const startListening = async () => {
+    window.speechSynthesis?.cancel();
+
+    if (offlineMode) {
+      if (isListening) {
+        await stopOfflineListening();
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStreamRef.current = stream;
+        const recorder = new SessionRecorder();
+        if (!recorder.start(stream)) throw new Error('Recorder unavailable');
+        recorderRef.current = recorder;
+        setIsListening(true);
+      } catch {
+        alert('Microphone unavailable. Check your mic and try again.');
+      }
+      return;
+    }
+
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -151,7 +192,9 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
     setVoiceEnabled(next);
     voiceEnabledRef.current = next;
     if (next) {
-      startListening();
+      void startListening();
+    } else if (offlineMode) {
+      void stopOfflineListening();
     } else {
       recognitionRef.current?.stop();
       window.speechSynthesis?.cancel();
@@ -162,8 +205,11 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
   const startNewConversation = () => {
     window.speechSynthesis?.cancel();
     recognitionRef.current?.stop();
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+    setIsListening(false);
     setConversationId(`conversation-${crypto.randomUUID()}`);
-    setUtterances([INITIAL_MESSAGE]);
+    setUtterances([createInitialMessage()]);
     setCurrentText('');
     setShowHistory(false);
   };
@@ -181,18 +227,22 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
 
   const finishConversation = async () => {
     const fullTranscript = utterances.map((item) => `${item.speaker}: ${item.text}`).join('\n');
+    const firstMessage = utterances[0];
+    const startedAt = firstMessage ? new Date(firstMessage.timestamp).getTime() : Date.now();
+    const durationSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
     const result = await evaluateSession({
       mode: 'CONVERSATION' as TrainingMode,
       contextPrompt: 'Natural multi-turn conversation',
       transcript: fullTranscript,
-      durationSeconds: 45
+      durationSeconds,
+      previousAttemptSession
     });
     onSessionComplete({
       id: `sess-${crypto.randomUUID()}`,
       timestamp: new Date().toISOString(),
       mode: 'CONVERSATION',
       modeLabel: 'Conversation',
-      durationSeconds: 45,
+      durationSeconds,
       contextPrompt: 'Natural multi-turn conversation',
       transcript: fullTranscript,
       score: result.score,
@@ -200,8 +250,11 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
       metrics: result.metrics,
       replays: result.replays,
       whyCoaching: result.whyCoaching,
-      attemptNumber: 1,
-      oneThingToPractice: result.oneThingToPractice
+      attemptNumber: previousAttemptSession ? previousAttemptSession.attemptNumber + 1 : 1,
+      previousAttemptId: previousAttemptSession?.id,
+      deltas: result.deltas,
+      oneThingToPractice: result.oneThingToPractice,
+      evaluationSource: result.source
     });
   };
 
@@ -285,7 +338,9 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete }) => {
             value={currentText}
             onChange={(event) => setCurrentText(event.target.value)}
             onKeyDown={(event) => event.key === 'Enter' && void sendMessage(currentText)}
-            placeholder={isListening ? 'Listening...' : 'Write or say something...'}
+            placeholder={isListening
+              ? (offlineMode ? 'Recording locally — tap mic again to send...' : 'Listening...')
+              : 'Write or say something...'}
           />
           <button
             onClick={() => void sendMessage(currentText)}

@@ -1,16 +1,13 @@
-import { GoogleGenAI } from '@google/genai';
-import type { 
-  TrainingMode, 
-  CommunicationMetrics, 
-  SessionReplayMarker, 
-  WhyCoachingCard, 
-  SessionDelta, 
-  Session 
+import type {
+  TrainingMode,
+  CommunicationMetrics,
+  SessionReplayMarker,
+  WhyCoachingCard,
+  SessionDelta,
+  Session,
+  WordTiming
 } from '../types';
-
-// Read API Key if configured
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '');
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+import { API_BASE } from './api';
 
 export interface EvaluationInput {
   mode: TrainingMode;
@@ -18,7 +15,7 @@ export interface EvaluationInput {
   targetAudience?: string;
   transcript: string;
   durationSeconds: number;
-  utterances?: { speaker: string; text: string; timestamp?: string }[];
+  wordTimings?: WordTiming[];
   previousAttemptSession?: Session | null;
 }
 
@@ -29,269 +26,85 @@ export interface EvaluationResult {
   whyCoaching: WhyCoachingCard[];
   deltas?: SessionDelta;
   oneThingToPractice: string;
+  source: 'AI' | 'MOCK';
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json() as Promise<T>;
+}
+
+export async function evaluateSession(input: EvaluationInput): Promise<EvaluationResult> {
+  try {
+    return await post<EvaluationResult>('/evaluate', input);
+  } catch (error) {
+    console.warn('Evaluation API unavailable, using minimal local fallback:', error);
+    return localFallback(input);
+  }
 }
 
 export async function generateConversationReply(
   transcript: string,
   history: { speaker: string; text: string }[]
 ): Promise<string> {
-  if (ai) {
-    try {
-      const prompt = [
-        'You are a warm, thoughtful communication coach having a natural spoken conversation.',
-        'Keep replies to 1-3 short sentences. Ask one relevant follow-up question.',
-        'Conversation history:',
-        ...history.slice(-8).map((item) => `${item.speaker}: ${item.text}`),
-        `User: ${transcript}`
-      ].join('\n');
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-      });
-      const reply = response.text?.trim();
-      if (reply) return reply;
-    } catch (error) {
-      console.warn('Gemini conversation reply failed, using local reply:', error);
-    }
+  try {
+    const result = await post<{ reply: string }>('/conversation-reply', { transcript, history });
+    return result.reply;
+  } catch {
+    return 'I understand. Could you tell me a little more about what happened and how you handled it?';
   }
-
-  const text = transcript.toLowerCase();
-  if (/^(hi|hello|hey)\b/.test(text)) {
-    return 'Hello. What would you like to talk about today?';
-  }
-  if (/\b(stress|anxious|nervous|worried)\b/.test(text)) {
-    return 'That sounds difficult. What happened just before you started feeling that way?';
-  }
-  if (/\b(work|job|team|project|manager)\b/.test(text)) {
-    return 'What part of that situation felt most important to you?';
-  }
-  return 'I understand. Could you tell me a little more about what happened and how you handled it?';
 }
 
-export async function evaluateSession(input: EvaluationInput): Promise<EvaluationResult> {
-  // If Gemini API is available, invoke Gemini model
-  if (ai) {
-    try {
-      return await evaluateWithGemini(input);
-    } catch (err) {
-      console.warn('Gemini API call failed, falling back to Intelligent Mock Engine:', err);
-    }
-  }
-
-  // Fallback / Standalone Intelligent Mock AI Engine
-  return generateIntelligentMockEvaluation(input);
-}
-
-async function evaluateWithGemini(input: EvaluationInput): Promise<EvaluationResult> {
-  const prompt = `
-You are a world-class long-term Personal AI Communication Coach.
-Evaluate this user communication session with high standards (brutally honest + supportive).
-
-Session Mode: ${input.mode}
-Context / Prompt: ${input.contextPrompt}
-Target Audience: ${input.targetAudience || 'General'}
-Duration (seconds): ${input.durationSeconds}
-Transcript: "${input.transcript}"
-
-Return ONLY a raw JSON object with this exact structure:
-{
-  "score": 7.4,
-  "metrics": {
-    "overall": 7.4,
-    "storytelling": 7.5,
-    "clarity": 8.0,
-    "engagement": 7.2,
-    "confidence": 7.0,
-    "wit": 6.5,
-    "spontaneity": 7.5,
-    "conciseness": 7.8,
-    "structure": 7.9,
-    "audienceAdaptation": 7.6,
-    "explanationQuality": 8.0,
-    "fillerWordsCount": 3,
-    "speakingPaceWPM": 142,
-    "responseRelevance": 8.8
-  },
-  "replays": [
-    {
-      "id": "m1",
-      "timestampSeconds": 10,
-      "label": "Strong Opening Hook",
-      "type": "STRONG_OPENING",
-      "textSnippet": "exact snippet",
-      "advice": "actionable tip"
-    }
-  ],
-  "whyCoaching": [
-    {
-      "id": "w1",
-      "category": "COMMUNICATION",
-      "observation": "What happened in user transcript",
-      "impact": "Why it hurt engagement",
-      "principle": "Underlying communication principle",
-      "exemplarReframing": "Better way to phrase it"
-    }
-  ],
-  "oneThingToPractice": "Clear single takeaway focus"
-}
-`;
-
-  const response = await ai!.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: prompt,
-  });
-
-  const text = response.text || '';
-  const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-  const parsed = JSON.parse(cleanJson);
-
-  if (input.previousAttemptSession) {
-    parsed.deltas = calculateDeltas(parsed, input.previousAttemptSession);
-  }
-
-  return parsed;
-}
-
-function generateIntelligentMockEvaluation(input: EvaluationInput): EvaluationResult {
-  const transcript = input.transcript || '';
-  const wordCount = transcript.split(/\s+/).filter(Boolean).length;
-  
-  // Real-time text analysis heuristic for fillers
-  const fillerRegex = /\b(um|uh|like|basically|you know|sort of|kind of|i mean|honestly)\b/gi;
-  const matches = transcript.match(fillerRegex) || [];
-  const fillerCount = matches.length;
-
-  const wpm = input.durationSeconds > 0 ? Math.round((wordCount / input.durationSeconds) * 60) : 135;
-
-  // Context-aware scoring heuristics
-  let storytelling = 7.2;
-  let clarity = 7.8;
-  let engagement = 7.0;
-  let wit = 6.0;
-  let confidence = 7.2;
-  let conciseness = 7.5;
-
-  if (input.mode === 'INTERVIEW') {
-    conciseness = fillerCount < 3 ? 8.4 : 6.8;
-    clarity = 8.2;
-  }
-
-  // Deduct for excess fillers
-  if (fillerCount > 4) {
-    clarity -= 0.6;
-    confidence -= 0.8;
-  }
-
-  const overall = parseFloat(((storytelling + clarity + engagement + confidence + conciseness) / 5).toFixed(1));
-
-  const replays: SessionReplayMarker[] = [
-    {
-      id: 'm-1',
-      timestampSeconds: Math.min(8, Math.round(input.durationSeconds * 0.1)),
-      label: fillerCount > 2 ? 'Filler Word Start' : 'Clean Opening Hook',
-      type: fillerCount > 2 ? 'FILLER_SPIKE' : 'STRONG_OPENING',
-      textSnippet: transcript.slice(0, 45) + '...',
-      advice: fillerCount > 2 ? 'Pause silently for 1 second before speaking to eliminate default fillers.' : 'Crisp start. You created immediate curiosity without unnecessary setup.'
-    },
-    {
-      id: 'm-2',
-      timestampSeconds: Math.round(input.durationSeconds * 0.45),
-      label: 'Core Explanation & Tension',
-      type: 'EXCELLENT_ANALOGY',
-      textSnippet: transcript.slice(Math.round(transcript.length * 0.3), Math.round(transcript.length * 0.6)) || 'Core explanation point...',
-      advice: 'Strong relational comparison here. It makes abstract concepts tangible.'
-    },
-    {
-      id: 'm-3',
-      timestampSeconds: Math.round(input.durationSeconds * 0.75),
-      label: 'Wit & Playful Reframing Opportunity',
-      type: 'MISSED_WIT',
-      textSnippet: transcript.slice(Math.round(transcript.length * 0.6), Math.round(transcript.length * 0.85)) || 'Transition section...',
-      advice: 'You stated a serious conclusion flatly. A light, unexpected contrast would increase audience warmth.'
-    },
-    {
-      id: 'm-4',
-      timestampSeconds: Math.max(input.durationSeconds - 5, 10),
-      label: 'Final Takeaway & Ending',
-      type: 'STRONG_ENDING',
-      textSnippet: transcript.slice(-50) || 'Final conclusion phrase.',
-      advice: 'Resonant ending. Make sure your vocal pitch doesn’t drop off sharply on the final word.'
-    }
-  ];
-
-  const whyCoaching: WhyCoachingCard[] = [
-    {
-      id: 'w-1',
-      category: 'COMMUNICATION',
-      observation: 'You explained the background setup for 25 seconds before introducing the core conflict.',
-      impact: 'The human brain tunes out when given raw context without a reason to care.',
-      principle: 'Curiosity before context. Ignite the spark first, then supply the fuel.',
-      exemplarReframing: 'Instead of: "In 2023 we had a project with 5 microservices...", start with: "We were 10 minutes away from demoing to 50 executives when our main database flatlined."'
-    },
-    {
-      id: 'w-2',
-      category: 'COMMUNICATION',
-      observation: 'You delivered the resolution with purely technical terms without tension release.',
-      impact: 'The listener feels informed, but not personally connected or entertained.',
-      principle: 'Contrast creates wit. Juxtaposing high technical stakes with everyday human moments creates natural lightness.',
-      exemplarReframing: 'Instead of: "We restored from cold backup", say: "While the server restored, I drank enough coffee to fuel a rocket launch to Mars."'
-    }
-  ];
-
-  const oneThingToPractice = input.mode === 'INTERVIEW'
-    ? 'Answer with a specific result and explain the action you personally took.'
-    : input.mode === 'CONVERSATION'
-      ? 'Ask one relevant follow-up question before sharing your own perspective.'
-      : 'Lead with your main point immediately, then unpack the supporting evidence.';
-
-  const result: EvaluationResult = {
-    score: overall,
-    metrics: {
-      overall,
-      storytelling: parseFloat(storytelling.toFixed(1)),
-      clarity: parseFloat(clarity.toFixed(1)),
-      engagement: parseFloat(engagement.toFixed(1)),
-      confidence: parseFloat(confidence.toFixed(1)),
-      wit: parseFloat(wit.toFixed(1)),
-      spontaneity: 7.4,
-      conciseness: parseFloat(conciseness.toFixed(1)),
-      structure: 8.0,
-      audienceAdaptation: 7.6,
-      explanationQuality: 8.1,
-      fillerWordsCount: fillerCount,
-      speakingPaceWPM: wpm,
-      responseRelevance: 8.8
-    },
-    replays,
-    whyCoaching,
-    oneThingToPractice
-  };
-
-  if (input.previousAttemptSession) {
-    result.deltas = calculateDeltas(result, input.previousAttemptSession);
-  }
-
-  return result;
-}
-
-function calculateDeltas(current: EvaluationResult, previous: Session): SessionDelta {
-  const prevMetrics = previous.metrics;
-  const currMetrics = current.metrics;
-
-  const calcPct = (curr: number, prev: number) => {
-    if (!prev) return 15;
-    return Math.round(((curr - prev) / prev) * 100);
-  };
+function localFallback(input: EvaluationInput): EvaluationResult {
+  const wordCount = input.transcript.split(/\s+/).filter(Boolean).length;
+  const fillerCount = (input.transcript.match(/\b(um|uh|like|basically|you know)\b/gi) || []).length;
+  const score = Math.max(1, Math.min(10, 7.5 - fillerCount * 0.3));
+  const first = input.wordTimings?.[0]?.start ?? 0;
+  const last = input.wordTimings?.[input.wordTimings.length - 1]?.end ?? input.durationSeconds;
 
   return {
-    overallChangePct: calcPct(currMetrics.overall, prevMetrics.overall),
-    hookStrengthChangePct: calcPct(currMetrics.engagement, prevMetrics.engagement),
-    clarityChangePct: calcPct(currMetrics.clarity, prevMetrics.clarity),
-    fillerReductionPct: prevMetrics.fillerWordsCount > 0 
-      ? Math.round(((prevMetrics.fillerWordsCount - currMetrics.fillerWordsCount) / prevMetrics.fillerWordsCount) * 100)
-      : 25,
-    emotionalDetailChangePct: calcPct(currMetrics.storytelling, prevMetrics.storytelling),
-    endingImpactChangePct: calcPct(currMetrics.confidence, prevMetrics.confidence)
+    score,
+    metrics: {
+      overall: score,
+      storytelling: score,
+      clarity: score,
+      engagement: score,
+      confidence: score,
+      wit: score,
+      spontaneity: score,
+      conciseness: score,
+      structure: score,
+      audienceAdaptation: score,
+      explanationQuality: score,
+      fillerWordsCount: fillerCount,
+      speakingPaceWPM: input.durationSeconds ? Math.round((wordCount / input.durationSeconds) * 60) : 135,
+      responseRelevance: score
+    },
+    replays: [
+      {
+        id: 'local-1',
+        timestampSeconds: Math.round(first),
+        label: 'Opening',
+        type: 'STRONG_OPENING',
+        textSnippet: input.transcript.slice(0, 45),
+        advice: 'Lead with the main point before adding background.'
+      },
+      {
+        id: 'local-2',
+        timestampSeconds: Math.round(last),
+        label: 'Ending',
+        type: 'STRONG_ENDING',
+        textSnippet: input.transcript.slice(-45),
+        advice: 'Finish with a single clear takeaway.'
+      }
+    ],
+    whyCoaching: [],
+    oneThingToPractice: 'State your main point first, then support it with one specific example.',
+    source: 'MOCK'
   };
 }
