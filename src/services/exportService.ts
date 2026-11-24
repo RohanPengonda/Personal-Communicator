@@ -1,4 +1,6 @@
 import type { Session } from '../types';
+import { API_BASE } from './api';
+import { withAuth } from './auth';
 
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -43,11 +45,14 @@ export function exportSessionJson(session: Session) {
   );
 }
 
-export async function exportRecording(session: Session) {
+// Let the browser stream the file from the server's Content-Disposition
+// response instead of fetching the whole recording into JS memory.
+export function exportRecording(session: Session) {
   if (!session.mediaUrl) return;
-  const response = await fetch(session.mediaUrl);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const blob = await response.blob();
-  const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
-  triggerDownload(blob, `${session.id}.${extension}`);
+  const link = document.createElement('a');
+  link.href = withAuth(`${API_BASE}/recordings/${encodeURIComponent(session.id)}/download`)!;
+  link.download = session.id;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }

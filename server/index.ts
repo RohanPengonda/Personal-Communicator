@@ -10,15 +10,30 @@ import { evaluateSession, generateConversationReply } from './aiService.ts';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT || 3001);
+const HOST = process.env.HOST || '127.0.0.1';
 const recordingsDir = path.resolve(process.cwd(), 'recordings');
 const distDir = path.resolve(process.cwd(), 'dist');
 const retentionDays = Number(process.env.RECORDING_RETENTION_DAYS || 30);
 const whisperUrl = process.env.WHISPER_URL || 'http://localhost:8080/inference';
+const appPasscode = process.env.APP_PASSCODE || '';
 
 app.use(cors());
 app.use(express.json());
+
+// Optional single-user gate. Empty passcode = no login screen. Tokens are not
+// used: the same passcode is sent as a header by the app and as a query param
+// by <video> elements, which cannot set headers.
+app.get('/api/auth-status', (_req, res) => res.json({ enabled: !!appPasscode }));
+app.use(['/api', '/recordings'], (req, res, next) => {
+  if (!appPasscode || req.path === '/auth-status') return next();
+  const supplied = req.get('x-app-passcode') || String(req.query.passcode || '');
+  if (supplied === appPasscode) return next();
+  res.status(401).json({ error: 'Passcode required' });
+});
+
 app.use('/recordings', express.static(recordingsDir));
+app.use('/recordings', (_req, res) => res.status(404).json({ error: 'Recording not found' }));
 
 function recordingPath(mediaUrl?: string | null): string | null {
   if (!mediaUrl) return null;
@@ -136,32 +151,170 @@ app.get('/api/storage', async (_req, res) => {
   }
 });
 
-app.get('/api/sessions', async (_req, res) => {
+function mapSession(row: any) {
+  return {
+    id: row.id,
+    timestamp: row.timestamp,
+    mode: row.mode,
+    modeLabel: row.mode_label,
+    durationSeconds: row.duration_seconds,
+    contextPrompt: row.context_prompt,
+    targetAudience: row.target_audience,
+    transcript: row.transcript,
+    score: row.score,
+    utterances: JSON.parse(row.utterances_json),
+    metrics: JSON.parse(row.metrics_json),
+    replays: JSON.parse(row.replays_json),
+    whyCoaching: JSON.parse(row.why_coaching_json),
+    attemptNumber: row.attempt_number,
+    previousAttemptId: row.previous_attempt_id,
+    deltas: row.deltas_json ? JSON.parse(row.deltas_json) : undefined,
+    oneThingToPractice: row.one_thing_to_practice,
+    mediaUrl: row.media_url || undefined,
+    evaluationSource: row.evaluation_source || undefined,
+    wordTimings: row.word_timings_json ? JSON.parse(row.word_timings_json) : undefined
+  };
+}
+
+app.get('/api/sessions', async (req, res) => {
+  try {
+    const database = await getDb();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 10));
+    const mode = typeof req.query.mode === 'string' && req.query.mode !== 'ALL'
+      ? req.query.mode : '';
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const sortBy = ['date', 'score', 'duration'].includes(String(req.query.sortBy))
+      ? String(req.query.sortBy) : 'date';
+    const scoreMin = Number(req.query.scoreMin);
+    const scoreMax = Number(req.query.scoreMax);
+    const dateFrom = typeof req.query.dateFrom === 'string' ? req.query.dateFrom : '';
+    const dateTo = typeof req.query.dateTo === 'string' ? req.query.dateTo : '';
+
+    const clauses: string[] = [];
+    const params: any[] = [];
+    if (mode) { clauses.push('mode = ?'); params.push(mode); }
+    if (search) {
+      const like = `%${search.toLowerCase()}%`;
+      clauses.push('(LOWER(transcript) LIKE ? OR LOWER(mode_label) LIKE ? OR LOWER(context_prompt) LIKE ?)');
+      params.push(like, like, like);
+    }
+    if (Number.isFinite(scoreMin)) { clauses.push('score >= ?'); params.push(scoreMin); }
+    if (Number.isFinite(scoreMax)) { clauses.push('score <= ?'); params.push(scoreMax); }
+    if (dateFrom) { clauses.push('timestamp >= ?'); params.push(dateFrom); }
+    if (dateTo) { clauses.push('timestamp <= ?'); params.push(dateTo); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const order = sortBy === 'score'
+      ? 'score DESC, timestamp DESC'
+      : sortBy === 'duration'
+        ? 'duration_seconds DESC, timestamp DESC'
+        : 'timestamp DESC';
+
+    const countRow = await database.get(`SELECT COUNT(*) AS count FROM sessions ${where}`, params);
+    const total = Number((countRow as any)?.count ?? 0);
+    const rows = await database.all(
+      `SELECT * FROM sessions ${where} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      [...params, pageSize, (page - 1) * pageSize]
+    );
+    res.json({
+      items: rows.map(mapSession),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize))
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.get('/api/sessions/latest', async (_req, res) => {
   try {
     const database = await getDb();
     const rows = await database.all('SELECT * FROM sessions ORDER BY timestamp DESC');
-    res.json(rows.map((row: any) => ({
-      id: row.id,
-      timestamp: row.timestamp,
-      mode: row.mode,
-      modeLabel: row.mode_label,
-      durationSeconds: row.duration_seconds,
-      contextPrompt: row.context_prompt,
-      targetAudience: row.target_audience,
-      transcript: row.transcript,
-      score: row.score,
-      utterances: JSON.parse(row.utterances_json),
-      metrics: JSON.parse(row.metrics_json),
-      replays: JSON.parse(row.replays_json),
-      whyCoaching: JSON.parse(row.why_coaching_json),
-      attemptNumber: row.attempt_number,
-      previousAttemptId: row.previous_attempt_id,
-      deltas: row.deltas_json ? JSON.parse(row.deltas_json) : undefined,
-      oneThingToPractice: row.one_thing_to_practice,
-      mediaUrl: row.media_url || undefined,
-      evaluationSource: row.evaluation_source || undefined,
-      wordTimings: row.word_timings_json ? JSON.parse(row.word_timings_json) : undefined
-    })));
+    const latest: Record<string, any> = {};
+    rows.forEach((row: any) => {
+      if (!latest[row.mode]) latest[row.mode] = mapSession(row);
+    });
+    res.json(latest);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.get('/api/sessions/stats', async (_req, res) => {
+  try {
+    const database = await getDb();
+    const rows = await database.all('SELECT * FROM sessions ORDER BY timestamp ASC');
+    const scores = rows.map((row: any) => Number(row.score));
+    const newest = scores.length ? new Date(rows[rows.length - 1].timestamp).getTime() : 0;
+    const weekAgo = newest - 7 * 24 * 60 * 60 * 1000;
+    const metricKeys = ['clarity', 'confidence', 'engagement', 'structure', 'conciseness', 'storytelling'];
+    const averages: Record<string, number> = {};
+    metricKeys.forEach((key) => {
+      const values = rows.map((row: any) => Number(JSON.parse(row.metrics_json)[key] || 0));
+      averages[key] = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+    });
+
+    const byMode: Record<string, any[]> = {};
+    rows.forEach((row: any) => {
+      (byMode[row.mode] ??= []).push(row);
+    });
+    const comparisons: any[] = [];
+    Object.values(byMode).forEach((list) => {
+      const ordered = list.slice().sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      for (let index = 0; index < Math.min(3, ordered.length - 1); index += 1) {
+        const current = ordered[index];
+        const previous = ordered[index + 1];
+        const change = current.score - previous.score;
+        comparisons.push({
+          id: current.id,
+          mode: current.mode,
+          timestamp: current.timestamp,
+          previousScore: previous.score,
+          score: current.score,
+          changePct: previous.score ? Math.round((change / previous.score) * 100) : 0,
+          deltas: current.deltas_json ? JSON.parse(current.deltas_json) : undefined
+        });
+      }
+    });
+
+    res.json({
+      summary: {
+        total: rows.length,
+        average: scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0,
+        best: scores.length ? Math.max(...scores) : 0,
+        recent: newest ? rows.filter((row: any) => new Date(row.timestamp).getTime() >= weekAgo).length : 0
+      },
+      trend: rows.slice(-12).map((row: any) => ({
+        id: row.id, timestamp: row.timestamp, score: row.score
+      })),
+      averages,
+      comparisons: comparisons
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 6)
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.get('/api/sessions/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+      res.status(400).json({ error: 'Invalid session id' });
+      return;
+    }
+    const database = await getDb();
+    const row = await database.get('SELECT * FROM sessions WHERE id = ?', [id]);
+    if (!row) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    res.json(mapSession(row));
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
@@ -206,6 +359,26 @@ app.post('/api/sessions', async (req, res) => {
   }
 });
 
+app.post('/api/sessions/delete-bulk', async (req, res) => {
+  try {
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const valid = ids.filter((id) => /^[a-zA-Z0-9_-]+$/.test(id));
+    if (!valid.length) {
+      res.status(400).json({ error: 'No valid session ids' });
+      return;
+    }
+    const database = await getDb();
+    for (const id of valid) {
+      const row = await database.get('SELECT media_url FROM sessions WHERE id = ?', [id]);
+      if (row) await removeRecording((row as any).media_url);
+      await database.run('DELETE FROM sessions WHERE id = ?', [id]);
+    }
+    res.json({ success: true, deleted: valid.length });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 app.delete('/api/sessions/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -231,6 +404,22 @@ app.post('/api/recordings/cleanup', async (_req, res) => {
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
+});
+
+app.get('/api/recordings/:id/download', (req, res) => {
+  const id = req.params.id;
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    res.status(400).json({ error: 'Invalid recording id' });
+    return;
+  }
+  for (const extension of ['webm', 'mp4']) {
+    const file = path.join(recordingsDir, `${id}.${extension}`);
+    if (existsSync(file)) {
+      res.download(file, `${id}.${extension}`);
+      return;
+    }
+  }
+  res.status(404).json({ error: 'Recording not found' });
 });
 
 app.post(
@@ -328,9 +517,10 @@ async function start() {
   await initDatabase();
   const removed = await cleanupExpiredRecordings();
   if (removed > 0) console.log(`Removed ${removed} expired recording(s).`);
-  app.listen(PORT, () => {
+  app.listen(PORT, HOST, () => {
     const mode = existsSync(path.join(distDir, 'index.html')) ? 'app + API' : 'API only';
-    console.log(`Communication Coach ${mode} listening on http://localhost:${PORT}`);
+    const gate = appPasscode ? ' (passcode required)' : '';
+    console.log(`Communication Coach ${mode} listening on http://${HOST}:${PORT}${gate}`);
   });
 }
 

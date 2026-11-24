@@ -25,6 +25,41 @@ export interface CommunicationMetrics {
   responseRelevance: number;
 }
 
+export interface SessionQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  mode?: TrainingMode | 'ALL';
+  sortBy?: 'date' | 'score' | 'duration';
+  scoreMin?: number;
+  scoreMax?: number;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export interface SessionPage {
+  items: Session[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+export interface ProgressStats {
+  summary: { total: number; average: number; best: number; recent: number };
+  trend: { id: string; timestamp: string; score: number }[];
+  averages: Record<string, number>;
+  comparisons: {
+    id: string;
+    mode: TrainingMode;
+    timestamp: string;
+    previousScore: number;
+    score: number;
+    changePct: number;
+    deltas?: SessionDelta;
+  }[];
+}
+
 export interface WordTiming {
   word: string;
   start: number;

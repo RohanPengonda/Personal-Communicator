@@ -34,6 +34,8 @@ The API runs on port 3001 and the Vite app runs on port 5173. If you change `POR
 
 Copy `.env.example` to `.env` to configure it. `GEMINI_API_KEY` is optional and is read **only by the server** (never bundled into the browser). Without a key, the app uses the local mock scoring engine and works fully offline.
 
+By default the server binds to `127.0.0.1` only, so recordings and History are not reachable from other devices. If you deliberately want LAN access, set `HOST=0.0.0.0` **and** set `APP_PASSCODE` to require a login. With a passcode configured, the app shows a lock screen; use the lock icon in the top bar to clear the saved passcode. The passcode is stored in that browser's `localStorage` and sent with every API and recording request.
+
 ## Online vs offline mode
 
 Use the **Online / Offline** toggle in the top bar to switch how speech is handled:
@@ -53,9 +55,9 @@ Then set `WHISPER_URL=http://localhost:8080/inference` in `.env`. Word timings a
 
 Live Coach and Interview sessions record the camera + microphone while you speak. The recording is uploaded to the API and stored in `recordings/`, while the transcript, score, metrics, and coaching markers are saved in `communication_agent.db`.
 
-Open the **History** tab to replay a past session, jump to a coaching marker, and read the transcript. You can search transcripts, filter by mode, sort by date/score/duration, page through every session, export the video/transcript/JSON, and delete sessions (including their recording). Marker buttons also appear on the results page right after a session ends.
+Open the **History** tab to replay a past session, jump to a coaching marker, and read the transcript. Search, mode filtering, sorting, and pagination all run on the server, so only one page of sessions is sent at a time. You can select multiple sessions with checkboxes and bulk-delete them, or delete a single session with a custom confirmation dialog (no browser `alert`/`confirm`). Video exports stream from the server instead of loading the whole file into browser memory. Marker buttons also appear on the results page right after a session ends.
 
-The **Progress** tab shows your score trend, average metric scores, and attempt-to-attempt changes. When you practice a mode again, the app links your new attempt to the previous one and computes real score/metric deltas. Coaching markers are aligned to word timings from local transcription, so marker buttons jump to the exact moment an issue happened. Results show whether feedback came from Gemini AI or the local mock engine, and sessions with no detected speech are rejected instead of being scored against placeholder text.
+The **Progress** tab shows your score trend, average metric scores, and attempt-to-attempt changes, aggregated server-side. When you practice a mode again, the app links your new attempt to the previous one and computes real score/metric deltas. Coaching markers are aligned to word timings from local transcription, so marker buttons jump to the exact moment an issue happened. Results show whether feedback came from Gemini AI or the local mock engine, and sessions with no detected speech are rejected instead of being scored against placeholder text.
 
 Scoring is deterministic: Gemini calls use temperature 0 with a fixed seed, and the local mock engine derives every metric from measurable transcript signals (filler rate, sentence length, specificity, structure, pace, lexical diversity). Re-evaluating the same answer produces the same score, and weak vs strong answers spread across the 1–10 range instead of clustering near 7.
 

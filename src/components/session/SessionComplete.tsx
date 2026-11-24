@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import type { Session } from '../../types';
 import { RotateCcw, CheckCircle2, Target, Download, FileText, FileJson } from 'lucide-react';
 import { exportRecording, exportSessionJson, exportTranscript } from '../../services/exportService';
+import { withAuth } from '../../services/auth';
 
 interface SessionCompleteProps {
   session: Session;
@@ -53,7 +54,7 @@ export const SessionComplete: React.FC<SessionCompleteProps> = ({
 
       {session.mediaUrl && (
         <section className="result-replay">
-          <video ref={videoRef} controls src={session.mediaUrl} />
+          <video ref={videoRef} controls src={withAuth(session.mediaUrl)} />
           {session.replays.length > 0 && (
             <div className="result-replay-markers">
               <p className="eyebrow">Jump to a moment</p>
@@ -113,7 +114,7 @@ export const SessionComplete: React.FC<SessionCompleteProps> = ({
         <div className="result-export">
           {session.mediaUrl && (
             <button
-              onClick={() => void exportRecording(session).catch(() => alert('Could not download the video.'))}
+              onClick={() => exportRecording(session)}
               className="secondary-button"
             >
               <Download className="w-4 h-4" /> Video

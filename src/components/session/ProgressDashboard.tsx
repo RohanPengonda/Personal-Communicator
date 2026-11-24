@@ -1,7 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { Session, TrainingMode } from '../../types';
+import type { ProgressStats, TrainingMode } from '../../types';
 import { api } from '../../services/api';
 import { TrendingUp, BarChart3, ArrowUpRight, ArrowDownRight, Target } from 'lucide-react';
+
+const EMPTY_STATS: ProgressStats = {
+  summary: { total: 0, average: 0, best: 0, recent: 0 },
+  trend: [],
+  averages: {},
+  comparisons: []
+};
 
 const MODE_LABELS: Record<TrainingMode, string> = {
   LIVE_COACH: 'Live Coach',
@@ -9,7 +16,7 @@ const MODE_LABELS: Record<TrainingMode, string> = {
   INTERVIEW: 'Interview'
 };
 
-const METRICS: [string, keyof Session['metrics']][] = [
+const METRICS: [string, string][] = [
   ['Clarity', 'clarity'],
   ['Confidence', 'confidence'],
   ['Engagement', 'engagement'],
@@ -24,80 +31,17 @@ const formatDate = (value: string) => new Date(value).toLocaleDateString(undefin
 });
 
 export const ProgressDashboard: React.FC = () => {
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [stats, setStats] = useState<ProgressStats>(EMPTY_STATS);
 
   useEffect(() => {
-    api.getSessions().then(setSessions);
+    void api.getProgressStats().then(setStats);
   }, []);
 
-  const trend = useMemo(
-    () => [...sessions]
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-      .slice(-12),
-    [sessions]
-  );
-
-  const summary = useMemo(() => {
-    const scores = sessions.map((session) => session.score);
-    const average = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
-    const newest = sessions.reduce(
-      (latest, session) => Math.max(latest, new Date(session.timestamp).getTime()),
-      0
-    );
-    const weekAgo = newest - 7 * 24 * 60 * 60 * 1000;
-    return {
-      total: sessions.length,
-      average,
-      best: scores.length ? Math.max(...scores) : 0,
-      recent: newest ? sessions.filter((session) => new Date(session.timestamp).getTime() >= weekAgo).length : 0
-    };
-  }, [sessions]);
-
-  const averages = useMemo(
-    () => METRICS.map(([label, key]) => ({
-      label,
-      value: sessions.length
-        ? sessions.reduce((sum, session) => sum + Number(session.metrics[key] || 0), 0) / sessions.length
-        : 0
-    })),
-    [sessions]
-  );
-
-  const comparisons = useMemo(() => {
-    const byMode: Partial<Record<TrainingMode, Session[]>> = {};
-    sessions.forEach((session) => {
-      const list = byMode[session.mode] ?? [];
-      list.push(session);
-      byMode[session.mode] = list;
-    });
-
-    const results: { session: Session; previous: Session; change: number; pct: number }[] = [];
-    (Object.keys(byMode) as TrainingMode[]).forEach((mode) => {
-      const list = (byMode[mode] ?? [])
-        .slice()
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      for (let index = 0; index < Math.min(3, list.length - 1); index += 1) {
-        const session = list[index];
-        const previous = list[index + 1];
-        results.push({
-          session,
-          previous,
-          change: session.score - previous.score,
-          pct: previous.score ? Math.round(((session.score - previous.score) / previous.score) * 100) : 0
-        });
-      }
-    });
-
-    return results
-      .sort((a, b) => new Date(b.session.timestamp).getTime() - new Date(a.session.timestamp).getTime())
-      .slice(0, 6);
-  }, [sessions]);
-
-  const chartPoints = trend.map((session, index) => {
-    const x = trend.length === 1 ? 260 : (index / (trend.length - 1)) * 520;
-    const y = 140 - (Math.min(10, Math.max(0, session.score)) / 10) * 130 - 5;
-    return { x, y, session };
-  });
+  const chartPoints = useMemo(() => stats.trend.map((point, index) => ({
+    x: stats.trend.length === 1 ? 260 : (index / (stats.trend.length - 1)) * 520,
+    y: 140 - (Math.min(10, Math.max(0, point.score)) / 10) * 130 - 5,
+    point
+  })), [stats.trend]);
 
   return (
     <div className="practice-layout">
@@ -110,21 +54,21 @@ export const ProgressDashboard: React.FC = () => {
         <TrendingUp className="practice-header-icon" />
       </header>
 
-      {sessions.length === 0 ? (
+      {stats.summary.total === 0 ? (
         <div className="media-empty">Finish a practice session to start tracking progress.</div>
       ) : (
         <div className="progress-layout">
           <section className="progress-summary">
-            <div><span>Sessions</span><strong>{summary.total}</strong></div>
-            <div><span>Average score</span><strong>{summary.average.toFixed(1)}</strong></div>
-            <div><span>Best score</span><strong>{summary.best.toFixed(1)}</strong></div>
-            <div><span>Last 7 days</span><strong>{summary.recent}</strong></div>
+            <div><span>Sessions</span><strong>{stats.summary.total}</strong></div>
+            <div><span>Average score</span><strong>{stats.summary.average.toFixed(1)}</strong></div>
+            <div><span>Best score</span><strong>{stats.summary.best.toFixed(1)}</strong></div>
+            <div><span>Last 7 days</span><strong>{stats.summary.recent}</strong></div>
           </section>
 
           <section className="progress-card">
             <div className="result-section-title">
               <TrendingUp className="w-4 h-4" />
-              <span>Score trend (last {trend.length} sessions)</span>
+              <span>Score trend (last {chartPoints.length} sessions)</span>
             </div>
             <svg className="progress-chart" viewBox="0 0 520 140" preserveAspectRatio="none">
               {[2, 4, 6, 8].map((level) => (
@@ -133,15 +77,15 @@ export const ProgressDashboard: React.FC = () => {
               {chartPoints.length > 1 && (
                 <polyline points={chartPoints.map((point) => `${point.x},${point.y}`).join(' ')} />
               )}
-              {chartPoints.map((point) => (
-                <circle key={point.session.id} cx={point.x} cy={point.y} r="4">
-                  <title>{`${formatDate(point.session.timestamp)} — ${point.session.score.toFixed(1)}`}</title>
+              {chartPoints.map(({ x, y, point }) => (
+                <circle key={point.id} cx={x} cy={y} r="4">
+                  <title>{`${formatDate(point.timestamp)} — ${point.score.toFixed(1)}`}</title>
                 </circle>
               ))}
             </svg>
             <div className="chart-labels">
-              <span>{chartPoints[0] ? formatDate(chartPoints[0].session.timestamp) : ''}</span>
-              <span>{chartPoints.length ? formatDate(chartPoints[chartPoints.length - 1].session.timestamp) : ''}</span>
+              <span>{chartPoints[0] ? formatDate(chartPoints[0].point.timestamp) : ''}</span>
+              <span>{chartPoints.length ? formatDate(chartPoints[chartPoints.length - 1].point.timestamp) : ''}</span>
             </div>
           </section>
 
@@ -151,13 +95,16 @@ export const ProgressDashboard: React.FC = () => {
               <span>Average metric scores</span>
             </div>
             <div className="metric-bars">
-              {averages.map((metric) => (
-                <div key={metric.label}>
-                  <span>{metric.label}</span>
-                  <div className="metric-track"><div style={{ width: `${metric.value * 10}%` }} /></div>
-                  <strong>{metric.value.toFixed(1)}</strong>
-                </div>
-              ))}
+              {METRICS.map(([label, key]) => {
+                const value = stats.averages[key] ?? 0;
+                return (
+                  <div key={label}>
+                    <span>{label}</span>
+                    <div className="metric-track"><div style={{ width: `${value * 10}%` }} /></div>
+                    <strong>{value.toFixed(1)}</strong>
+                  </div>
+                );
+              })}
             </div>
           </section>
 
@@ -166,27 +113,27 @@ export const ProgressDashboard: React.FC = () => {
               <Target className="w-4 h-4" />
               <span>Attempt-to-attempt changes</span>
             </div>
-            {comparisons.length === 0 && <p className="history-empty">Practice the same mode twice to see changes.</p>}
+            {stats.comparisons.length === 0 && <p className="history-empty">Practice the same mode twice to see changes.</p>}
             <div className="comparison-grid">
-              {comparisons.map(({ session, previous, change, pct }) => (
-                <article key={session.id}>
+              {stats.comparisons.map((item) => (
+                <article key={item.id}>
                   <div>
-                    <strong>{MODE_LABELS[session.mode]}</strong>
-                    <span>{formatDate(session.timestamp)}</span>
+                    <strong>{MODE_LABELS[item.mode]}</strong>
+                    <span>{formatDate(item.timestamp)}</span>
                   </div>
                   <div className="comparison-score">
-                    <strong>{previous.score.toFixed(1)}</strong>
+                    <strong>{item.previousScore.toFixed(1)}</strong>
                     <span>→</span>
-                    <strong>{session.score.toFixed(1)}</strong>
-                    <em className={change >= 0 ? 'positive' : 'negative'}>
-                      {change >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                      {pct >= 0 ? '+' : ''}{pct}%
+                    <strong>{item.score.toFixed(1)}</strong>
+                    <em className={item.changePct >= 0 ? 'positive' : 'negative'}>
+                      {item.changePct >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                      {item.changePct >= 0 ? '+' : ''}{item.changePct}%
                     </em>
                   </div>
-                  {session.deltas && (
+                  {item.deltas && (
                     <small>
-                      Clarity {session.deltas.clarityChangePct >= 0 ? '+' : ''}{session.deltas.clarityChangePct}% ·
-                      Fillers {session.deltas.fillerReductionPct >= 0 ? '+' : ''}{session.deltas.fillerReductionPct}%
+                      Clarity {item.deltas.clarityChangePct >= 0 ? '+' : ''}{item.deltas.clarityChangePct}% ·
+                      Fillers {item.deltas.fillerReductionPct >= 0 ? '+' : ''}{item.deltas.fillerReductionPct}%
                     </small>
                   )}
                 </article>

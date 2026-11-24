@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { Session, TrainingMode } from '../../types';
+import React, { useEffect, useMemo, useState } from 'react';
+import type { SessionPage, SessionQuery, TrainingMode } from '../../types';
 import { api } from '../../services/api';
 import { exportRecording, exportSessionJson, exportTranscript } from '../../services/exportService';
+import { withAuth } from '../../services/auth';
 import {
   History,
   Video,
@@ -19,10 +20,9 @@ interface SessionHistoryProps {
   onPractice: (mode: TrainingMode) => void;
 }
 
-type ModeFilter = 'ALL' | TrainingMode;
-type SortBy = 'date' | 'score' | 'duration';
+const EMPTY_PAGE: SessionPage = { items: [], total: 0, page: 1, pageSize: 5, pageCount: 1 };
 
-const PAGE_SIZE = 5;
+type ConfirmState = { ids: string[]; title: string; body: string };
 
 const formatTime = (seconds: number) => {
   const value = Math.max(0, Math.round(seconds));
@@ -36,52 +36,36 @@ const formatBytes = (bytes: number) => {
 };
 
 export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) => {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [requestedId, setRequestedId] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [modeFilter, setModeFilter] = useState<ModeFilter>('ALL');
-  const [sortBy, setSortBy] = useState<SortBy>('date');
-  const [page, setPage] = useState(1);
+  const [query, setQuery] = useState<SessionQuery>({ search: '', mode: 'ALL', sortBy: 'date', page: 1, pageSize: 5 });
+  const [result, setResult] = useState<SessionPage>(EMPTY_PAGE);
   const [storage, setStorage] = useState({ bytes: 0, count: 0, retentionDays: 0 });
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  const loadSessions = async () => {
-    const [items, info] = await Promise.all([api.getSessions(), api.getStorage()]);
-    setSessions(items);
-    setStorage(info);
-  };
+  const [requestedId, setRequestedId] = useState<string | null>(null);
+  const [checked, setChecked] = useState<string[]>([]);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  const [notice, setNotice] = useState('');
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    void api.getSessions().then(setSessions);
+    void api.getSessions(query).then(setResult);
     void api.getStorage().then(setStorage);
-  }, []);
+  }, [query]);
 
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const items = sessions.filter((session) => {
-      const matchesMode = modeFilter === 'ALL' || session.mode === modeFilter;
-      const matchesQuery =
-        !query ||
-        session.transcript.toLowerCase().includes(query) ||
-        session.modeLabel.toLowerCase().includes(query) ||
-        session.contextPrompt.toLowerCase().includes(query);
-      return matchesMode && matchesQuery;
-    });
+  const reload = () => {
+    void api.getSessions(query).then(setResult);
+    void api.getStorage().then(setStorage);
+  };
 
-    return [...items].sort((a, b) => {
-      if (sortBy === 'score') return b.score - a.score;
-      if (sortBy === 'duration') return b.durationSeconds - a.durationSeconds;
-      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-    });
-  }, [sessions, search, modeFilter, sortBy]);
+  const selectedId = useMemo(
+    () => requestedId && result.items.some((item) => item.id === requestedId)
+      ? requestedId
+      : (result.items[0]?.id ?? null),
+    [requestedId, result.items]
+  );
+  const selected = result.items.find((item) => item.id === selectedId) ?? null;
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const selectedId = requestedId && sessions.some((item) => item.id === requestedId)
-    ? requestedId
-    : (sessions[0]?.id ?? null);
-  const selected = sessions.find((session) => session.id === selectedId) ?? null;
+  const changeQuery = (changes: Partial<SessionQuery>) => {
+    setQuery((current) => ({ ...current, ...changes, page: changes.page ?? 1 }));
+  };
 
   const seekTo = (seconds: number) => {
     const video = videoRef.current;
@@ -90,16 +74,29 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
     void video.play().catch(() => {});
   };
 
-  const handleDelete = async (session: Session) => {
-    if (!window.confirm('Delete this session and its recording?')) return;
-    await api.deleteSession(session.id);
-    await loadSessions();
+  const runDelete = async () => {
+    if (!confirm) return;
+    const ids = confirm.ids;
+    const deleted = ids.length === 1
+      ? await api.deleteSession(ids[0])
+        ? 1 : 0
+      : await api.deleteSessions(ids);
+    setConfirm(null);
+    setChecked((current) => current.filter((id) => !ids.includes(id)));
+    setNotice(`${deleted} session${deleted === 1 ? '' : 's'} deleted.`);
+    reload();
   };
 
   const handleCleanup = async () => {
     const removed = await api.cleanupRecordings();
-    await loadSessions();
-    window.alert(removed > 0 ? `Removed ${removed} expired recording(s).` : 'No expired recordings.');
+    setNotice(removed > 0 ? `Removed ${removed} expired recording(s).` : 'No expired recordings.');
+    reload();
+  };
+
+  const toggleChecked = (id: string) => {
+    setChecked((current) => current.includes(id)
+      ? current.filter((item) => item !== id)
+      : [...current, id]);
   };
 
   return (
@@ -110,12 +107,13 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
           <h1>Review your sessions</h1>
           <p>Watch your recording, jump to a coaching marker, and read the transcript.</p>
           <p className="storage-line">
-            {storage.count} recording{storage.count === 1 ? '' : 's'} · {formatBytes(storage.bytes)}
+            {result.total} session{result.total === 1 ? '' : 's'} · {storage.count} recording{storage.count === 1 ? '' : 's'} · {formatBytes(storage.bytes)}
             {storage.retentionDays > 0 && ` · auto-clean after ${storage.retentionDays} days`}
             <button onClick={() => void handleCleanup()} className="link-button" title="Clean up now">
               <RefreshCw className="w-3 h-3" /> Clean up now
             </button>
           </p>
+          {notice && <p className="history-notice">{notice}</p>}
         </div>
         <History className="practice-header-icon" />
       </header>
@@ -126,21 +124,15 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
             <label className="search-field">
               <Search className="w-4 h-4" />
               <input
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPage(1);
-                }}
+                value={query.search}
+                onChange={(event) => changeQuery({ search: event.target.value })}
                 placeholder="Search transcripts"
               />
             </label>
             <div className="filter-row">
               <select
-                value={modeFilter}
-                onChange={(event) => {
-                  setModeFilter(event.target.value as ModeFilter);
-                  setPage(1);
-                }}
+                value={query.mode}
+                onChange={(event) => changeQuery({ mode: event.target.value as SessionQuery['mode'] })}
               >
                 <option value="ALL">All modes</option>
                 <option value="LIVE_COACH">Live Coach</option>
@@ -148,11 +140,8 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
                 <option value="INTERVIEW">Interview</option>
               </select>
               <select
-                value={sortBy}
-                onChange={(event) => {
-                  setSortBy(event.target.value as SortBy);
-                  setPage(1);
-                }}
+                value={query.sortBy}
+                onChange={(event) => changeQuery({ sortBy: event.target.value as SessionQuery['sortBy'] })}
               >
                 <option value="date">Newest</option>
                 <option value="score">Top score</option>
@@ -161,37 +150,59 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
             </div>
           </div>
 
-          {filtered.length === 0 && (
-            <p className="history-empty">No sessions match these filters.</p>
+          {checked.length > 0 && (
+            <div className="bulk-bar">
+              <span>{checked.length} selected</span>
+              <button
+                onClick={() => setConfirm({
+                  ids: checked,
+                  title: `Delete ${checked.length} sessions?`,
+                  body: 'Their recordings will be removed too. This cannot be undone.'
+                })}
+                className="secondary-button danger-button"
+              >
+                <Trash2 className="w-4 h-4" /> Delete selected
+              </button>
+              <button onClick={() => setChecked([])} className="link-button">Clear</button>
+            </div>
           )}
-          {paged.map((session) => (
-            <button
-              key={session.id}
-              onClick={() => setRequestedId(session.id)}
-              className={session.id === selectedId ? 'session-item session-active' : 'session-item'}
-            >
-              <strong>{session.modeLabel}</strong>
-              <span>{new Date(session.timestamp).toLocaleString()}</span>
-              <span>
-                {session.score.toFixed(1)}/10 · {formatTime(session.durationSeconds)}
-                {session.mediaUrl ? ' · video' : ''}
-              </span>
-            </button>
+
+          {result.items.length === 0 && <p className="history-empty">No sessions match these filters.</p>}
+          {result.items.map((session) => (
+            <div key={session.id} className="session-item-row">
+              <input
+                type="checkbox"
+                checked={checked.includes(session.id)}
+                onChange={() => toggleChecked(session.id)}
+                aria-label={`Select ${session.modeLabel} session`}
+              />
+              <button
+                onClick={() => setRequestedId(session.id)}
+                className={session.id === selectedId ? 'session-item session-active' : 'session-item'}
+              >
+                <strong>{session.modeLabel}</strong>
+                <span>{new Date(session.timestamp).toLocaleString()}</span>
+                <span>
+                  {session.score.toFixed(1)}/10 · {formatTime(session.durationSeconds)}
+                  {session.mediaUrl ? ' · video' : ''}
+                </span>
+              </button>
+            </div>
           ))}
 
-          {filtered.length > PAGE_SIZE && (
+          {result.pageCount > 1 && (
             <div className="pager">
               <button
-                onClick={() => setPage((value) => Math.max(1, value - 1))}
-                disabled={currentPage === 1}
+                onClick={() => changeQuery({ page: result.page - 1 })}
+                disabled={result.page <= 1}
                 title="Previous page"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span>Page {currentPage} of {pageCount}</span>
+              <span>Page {result.page} of {result.pageCount}</span>
               <button
-                onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
-                disabled={currentPage === pageCount}
+                onClick={() => changeQuery({ page: result.page + 1 })}
+                disabled={result.page >= result.pageCount}
                 title="Next page"
               >
                 <ChevronRight className="w-4 h-4" />
@@ -222,7 +233,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
               </div>
 
               {selected.mediaUrl ? (
-                <video ref={videoRef} className="session-video" controls src={selected.mediaUrl} />
+                <video ref={videoRef} className="session-video" controls src={withAuth(selected.mediaUrl)} />
               ) : (
                 <div className="media-empty">
                   <Video className="w-7 h-7" />
@@ -270,10 +281,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
 
               <div className="session-detail-actions">
                 {selected.mediaUrl && (
-                  <button
-                    onClick={() => void exportRecording(selected).catch(() => alert('Could not download the video.'))}
-                    className="secondary-button"
-                  >
+                  <button onClick={() => exportRecording(selected)} className="secondary-button">
                     <Download className="w-4 h-4" /> Video
                   </button>
                 )}
@@ -283,7 +291,14 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
                 <button onClick={() => exportSessionJson(selected)} className="secondary-button">
                   <FileJson className="w-4 h-4" /> JSON
                 </button>
-                <button onClick={() => void handleDelete(selected)} className="secondary-button danger-button">
+                <button
+                  onClick={() => setConfirm({
+                    ids: [selected.id],
+                    title: 'Delete this session?',
+                    body: 'Its recording, transcript and feedback will be removed. This cannot be undone.'
+                  })}
+                  className="secondary-button danger-button"
+                >
                   <Trash2 className="w-4 h-4" /> Delete
                 </button>
                 <button onClick={() => onPractice(selected.mode)} className="primary-action session-practice">
@@ -294,6 +309,19 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
           )}
         </section>
       </div>
+
+      {confirm && (
+        <div className="modal-backdrop" onClick={() => setConfirm(null)}>
+          <div className="confirm-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>{confirm.title}</h2>
+            <p>{confirm.body}</p>
+            <div className="confirm-actions">
+              <button onClick={() => setConfirm(null)} className="secondary-button">Cancel</button>
+              <button onClick={() => void runDelete()} className="secondary-button danger-button">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
