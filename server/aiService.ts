@@ -49,17 +49,62 @@ const normalize = (value: string) =>
 
 const FILLER = /^(um|uh|like|basically|you\s+know|sort\s+of|kind\s+of|i\s+mean|honestly)$/i;
 
-// Map coaching markers onto real word timings from local S2T when available.
-function alignReplays(markers: SessionReplayMarker[], transcript: string, timings: WordTiming[]) {
+// Map coaching markers onto word timings from local S2T or the browser's
+// incremental recognition events. The transcript can interleave AI and user
+// text, so pick the alignment that matches the most timing words rather than
+// taking the first identical word in the conversation.
+export function alignReplays(markers: SessionReplayMarker[], transcript: string, timings: WordTiming[]) {
   if (!timings.length) return markers;
 
   const text = normalize(transcript);
+  const textWords = text.split(' ').filter(Boolean);
+  const wordPositions: { start: number; end: number }[] = [];
   let cursor = 0;
-  const wordOffsets = timings.map((timing, index) => {
-    const found = text.indexOf(normalize(timing.word), cursor);
-    const startChar = found >= 0 ? found : cursor;
-    cursor = startChar + normalize(timing.word).length;
-    return { startChar, endChar: cursor, index };
+  textWords.forEach((word) => {
+    wordPositions.push({ start: cursor, end: cursor + word.length });
+    cursor += word.length + 1;
+  });
+
+  const timingWords = timings
+    .map((timing, index) => ({ index, words: normalize(timing.word).split(' ').filter(Boolean) }))
+    .filter((item) => item.words.length > 0);
+  const flatWords = timingWords.flatMap((item) => item.words);
+  const owners = timingWords.flatMap((item) => item.words.map(() => item.index));
+
+  let bestStart = 0;
+  let bestScore = -1;
+  for (let start = 0; start < textWords.length && flatWords.length; start += 1) {
+    if (textWords[start] !== flatWords[0]) continue;
+    let matched = 0;
+    let offset = 0;
+    let lastPosition = start;
+    for (
+      let position = start;
+      position < textWords.length && offset < flatWords.length;
+      position += 1
+    ) {
+      if (textWords[position] === flatWords[offset]) {
+        matched += 1;
+        offset += 1;
+        lastPosition = position;
+      }
+    }
+    // Prefer the most matches, then the tightest run of transcript words.
+    const score = matched * 1000 - (lastPosition - start + 1);
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = start;
+    }
+  }
+
+  const wordOffsets: { startChar: number; endChar: number; index: number }[] = [];
+  let position = bestStart;
+  flatWords.forEach((word, flatIndex) => {
+    while (position < textWords.length && textWords[position] !== word) position += 1;
+    if (position >= textWords.length) return;
+    const span = wordPositions[position];
+    wordOffsets.push({ startChar: span.start, endChar: span.end, index: owners[flatIndex] });
+    position += 1;
   });
 
   return markers.map((marker) => {

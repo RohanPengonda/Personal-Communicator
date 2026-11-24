@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { SavedConversation, Session, TrainingMode, Utterance } from '../../types';
+import type { SavedConversation, Session, TrainingMode, Utterance, WordTiming } from '../../types';
 import { evaluateSession, generateConversationReply } from '../../services/aiCoachService';
 import { api } from '../../services/api';
 import { SessionRecorder } from '../../services/recordingService';
+import { offsetWordTimings, RecognitionTimingTracker } from '../../services/wordTimingService';
 import { History, Mic, MicOff, Send, Plus, Trash2 } from 'lucide-react';
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 }
 
 const createId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+const now = () => Date.now();
 
 const createInitialMessage = (): Utterance => ({
   id: 'welcome',
@@ -34,6 +36,9 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
   const micStreamRef = useRef<MediaStream | null>(null);
   const voiceEnabledRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const wordTimingsRef = useRef<WordTiming[]>([]);
+  const conversationStartedAtRef = useRef(now());
+  const offlineStartedAtRef = useRef(0);
 
   useEffect(() => {
     api.getConversations().then(setConversations);
@@ -120,6 +125,13 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
     if (recording) {
       try {
         const transcription = await api.transcribeAudio(recording);
+        if (transcription.wordTimings.length) {
+          const offset = (offlineStartedAtRef.current - conversationStartedAtRef.current) / 1000;
+          wordTimingsRef.current = [
+            ...wordTimingsRef.current,
+            ...offsetWordTimings(transcription.wordTimings, offset)
+          ];
+        }
         if (transcription.text.trim()) void sendMessage(transcription.text.trim());
       } catch {
         alert('Local transcription unavailable. Start your Whisper service and try again.');
@@ -141,6 +153,7 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
         const recorder = new SessionRecorder();
         if (!recorder.start(stream)) throw new Error('Recorder unavailable');
         recorderRef.current = recorder;
+        offlineStartedAtRef.current = now();
         setIsListening(true);
       } catch {
         alert('Microphone unavailable. Check your mic and try again.');
@@ -163,11 +176,17 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
+    const timingTracker = new RecognitionTimingTracker(
+      (now() - conversationStartedAtRef.current) / 1000
+    );
+    let committed = false;
+
     recognition.onstart = () => setIsListening(true);
     recognition.onend = () => {
       setIsListening(false);
     };
     recognition.onresult = (event: any) => {
+      timingTracker.observe(event);
       let finalText = '';
       let interimText = '';
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -175,7 +194,9 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
         else interimText += event.results[i][0].transcript;
       }
       setCurrentText(finalText || interimText);
-      if (finalText.trim()) {
+      if (finalText.trim() && !committed) {
+        committed = true;
+        wordTimingsRef.current = [...wordTimingsRef.current, ...timingTracker.getTimings()];
         recognition.stop();
         void sendMessage(finalText);
       }
@@ -212,6 +233,8 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
     setUtterances([createInitialMessage()]);
     setCurrentText('');
     setShowHistory(false);
+    wordTimingsRef.current = [];
+    conversationStartedAtRef.current = now();
   };
 
   const loadConversation = (conversation: SavedConversation) => {
@@ -228,13 +251,14 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
   const finishConversation = async () => {
     const fullTranscript = utterances.map((item) => `${item.speaker}: ${item.text}`).join('\n');
     const firstMessage = utterances[0];
-    const startedAt = firstMessage ? new Date(firstMessage.timestamp).getTime() : Date.now();
-    const durationSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    const startedAt = firstMessage ? new Date(firstMessage.timestamp).getTime() : now();
+    const durationSeconds = Math.max(1, Math.round((now() - startedAt) / 1000));
     const result = await evaluateSession({
       mode: 'CONVERSATION' as TrainingMode,
       contextPrompt: 'Natural multi-turn conversation',
       transcript: fullTranscript,
       durationSeconds,
+      wordTimings: wordTimingsRef.current,
       previousAttemptSession
     });
     onSessionComplete({
@@ -254,7 +278,8 @@ export const ConversationMode: React.FC<Props> = ({ onSessionComplete, previousA
       previousAttemptId: previousAttemptSession?.id,
       deltas: result.deltas,
       oneThingToPractice: result.oneThingToPractice,
-      evaluationSource: result.source
+      evaluationSource: result.source,
+      wordTimings: wordTimingsRef.current
     });
   };
 

@@ -33,6 +33,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<SessionRecorder | null>(null);
   const speechTrackerRef = useRef<SpeechTracker | null>(null);
+  const wordTimingsRef = useRef<WordTiming[]>([]);
   const timerRef = useRef<any>(null);
 
   // Initialize Camera MediaStream
@@ -70,6 +71,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     setTimerSeconds(0);
     setNoSpeech(false);
     setTranscriptionError('');
+    wordTimingsRef.current = [];
     setIsRecording(true);
 
     if (streamRef.current) {
@@ -87,6 +89,9 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
         onPaceUpdate: (wpm) => setPaceWpm(wpm),
         onFillerDetected: (count, _word) => {
           setFillerCount(count);
+        },
+        onWordTimings: (timings) => {
+          wordTimingsRef.current = timings;
         }
       });
 
@@ -104,7 +109,7 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     if (timerRef.current) clearInterval(timerRef.current);
 
     if (speechTrackerRef.current) {
-      speechTrackerRef.current.stop();
+      await speechTrackerRef.current.stop();
     }
     const recording = await (recorderRef.current?.stop() ?? Promise.resolve(null));
     const sessionId = `sess-${crypto.randomUUID()}`;
@@ -125,6 +130,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
         setTranscriptionError('Local transcription unavailable. Start your Whisper service and try again.');
         return;
       }
+    } else {
+      wordTimings = wordTimingsRef.current;
     }
 
     if (!finalTranscript) {

@@ -32,6 +32,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAtte
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<SessionRecorder | null>(null);
   const trackerRef = useRef<SpeechTracker | null>(null);
+  const wordTimingsRef = useRef<WordTiming[]>([]);
   const timerRef = useRef<any>(null);
 
   useEffect(() => {
@@ -63,6 +64,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAtte
     setVolume(0);
     setNoSpeech(false);
     setTranscriptionError('');
+    wordTimingsRef.current = [];
     setIsRecording(true);
 
     if (streamRef.current) {
@@ -75,7 +77,10 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAtte
         onTranscriptUpdate: (full, interim) => setTranscript((full + ' ' + interim).trim()),
         onVolumeChange: (level) => setVolume(level),
         onPaceUpdate: () => {},
-        onFillerDetected: () => {}
+        onFillerDetected: () => {},
+        onWordTimings: (timings) => {
+          wordTimingsRef.current = timings;
+        }
       });
 
       trackerRef.current = tracker;
@@ -88,7 +93,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAtte
   const handleStop = async () => {
     setIsRecording(false);
     if (timerRef.current) clearInterval(timerRef.current);
-    if (trackerRef.current) trackerRef.current.stop();
+    if (trackerRef.current) await trackerRef.current.stop();
     const recording = await (recorderRef.current?.stop() ?? Promise.resolve(null));
     const sessionId = `sess-${crypto.randomUUID()}`;
 
@@ -108,6 +113,8 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAtte
         setTranscriptionError('Local transcription unavailable. Start your Whisper service and try again.');
         return;
       }
+    } else {
+      wordTimings = wordTimingsRef.current;
     }
 
     if (!finalTranscript) {

@@ -1,3 +1,6 @@
+import type { WordTiming } from '../types';
+import { RecognitionTimingTracker } from './wordTimingService';
+
 // Web Speech API interface declarations
 interface SpeechRecognitionEvent extends Event {
   resultIndex: number;
@@ -13,6 +16,7 @@ export interface SpeechTrackerCallbacks {
   onVolumeChange: (volume: number) => void;
   onPaceUpdate: (wpm: number) => void;
   onFillerDetected: (count: number, lastFiller: string) => void;
+  onWordTimings?: (timings: WordTiming[]) => void;
 }
 
 export class SpeechTracker {
@@ -25,6 +29,7 @@ export class SpeechTracker {
   private startTime = 0;
   private fillerCount = 0;
   private animationFrameId = 0;
+  private timingTracker: RecognitionTimingTracker | null = null;
 
   private callbacks: SpeechTrackerCallbacks;
 
@@ -37,6 +42,7 @@ export class SpeechTracker {
     this.fillerCount = 0;
     this.startTime = Date.now();
     this.isListening = true;
+    this.timingTracker = new RecognitionTimingTracker();
 
     // 1. Web Speech Recognition Setup
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -47,6 +53,9 @@ export class SpeechTracker {
       this.recognition.lang = 'en-US';
 
       this.recognition.onresult = (event: SpeechRecognitionEvent) => {
+        this.timingTracker?.observe(event);
+        this.emitWordTimings();
+
         let interim = '';
         let final = '';
 
@@ -102,13 +111,29 @@ export class SpeechTracker {
     }
   }
 
-  public stop() {
+  public stop(): Promise<void> {
     this.isListening = false;
-    if (this.recognition) {
-      try {
-        this.recognition.stop();
-      } catch {}
-    }
+    const recognition = this.recognition;
+    const recognitionDone = recognition
+      ? new Promise<void>((resolve) => {
+          let done = false;
+          let timeoutId = 0;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            window.clearTimeout(timeoutId);
+            this.emitWordTimings();
+            resolve();
+          };
+          timeoutId = window.setTimeout(finish, 400);
+          recognition.onend = finish;
+          try {
+            recognition.stop();
+          } catch {
+            finish();
+          }
+        })
+      : Promise.resolve();
 
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
@@ -117,6 +142,13 @@ export class SpeechTracker {
     if (this.audioContext && this.audioContext.state !== 'closed') {
       this.audioContext.close();
     }
+
+    return recognitionDone;
+  }
+
+  private emitWordTimings() {
+    if (!this.callbacks.onWordTimings || !this.timingTracker) return;
+    this.callbacks.onWordTimings(this.timingTracker.getTimings());
   }
 
   private checkFillers(newText: string) {

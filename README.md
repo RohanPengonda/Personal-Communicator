@@ -49,7 +49,9 @@ To run fully offline, start a local Whisper HTTP service that accepts raw audio 
 ./server -m models/ggml-base.en.bin --port 8080
 ```
 
-Then set `WHISPER_URL=http://localhost:8080/inference` in `.env`. Word timings are used to place coaching markers at the exact moment in the recording where each issue occurred.
+Then set `WHISPER_URL=http://localhost:8080/inference` in `.env`. Whisper's word timings are used to place coaching markers at the exact moment in the recording where each issue occurred.
+
+In **Online** mode no extra service is needed: the app derives word onsets from the browser's incremental recognition results (each word is timestamped when it first appears, then finalized when the result is locked in). Both modes save a `wordTimings` array with the session, and coaching markers are aligned to it, so marker buttons jump to the actual moment a phrase was spoken instead of a fixed fraction of the recording. Whisper remains the most precise source; browser-derived timings are event-based estimates at the word level.
 
 ## Reviewing sessions
 
@@ -57,7 +59,7 @@ Live Coach and Interview sessions record the camera + microphone while you speak
 
 Open the **History** tab to replay a past session, jump to a coaching marker, and read the transcript. Search, mode filtering, sorting, and pagination all run on the server, so only one page of sessions is sent at a time. You can select multiple sessions with checkboxes and bulk-delete them, or delete a single session with a custom confirmation dialog (no browser `alert`/`confirm`). Video exports stream from the server instead of loading the whole file into browser memory. Marker buttons also appear on the results page right after a session ends.
 
-The **Progress** tab shows your score trend, average metric scores, and attempt-to-attempt changes, aggregated server-side. When you practice a mode again, the app links your new attempt to the previous one and computes real score/metric deltas. Coaching markers are aligned to word timings from local transcription, so marker buttons jump to the exact moment an issue happened. Results show whether feedback came from Gemini AI or the local mock engine, and sessions with no detected speech are rejected instead of being scored against placeholder text.
+The **Progress** tab shows your score trend, average metric scores, and attempt-to-attempt changes, aggregated server-side. When you practice a mode again, the app links your new attempt to the previous one and computes real score/metric deltas. Coaching markers are aligned to saved word timings (Whisper offline, browser recognition events online), so marker buttons jump to the moment an issue happened. Results show whether feedback came from Gemini AI or the local mock engine, and sessions with no detected speech are rejected instead of being scored against placeholder text.
 
 Scoring is deterministic: Gemini calls use temperature 0 with a fixed seed, and the local mock engine derives every metric from measurable transcript signals (filler rate, sentence length, specificity, structure, pace, lexical diversity). Re-evaluating the same answer produces the same score, and weak vs strong answers spread across the 1–10 range instead of clustering near 7.
 
