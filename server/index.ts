@@ -1,13 +1,16 @@
+import './env.ts';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import path from 'path';
 import { existsSync } from 'fs';
 import { mkdir, stat, unlink, writeFile } from 'fs/promises';
 import { getDb, initDatabase } from './db.ts';
-import { evaluateSession, generateConversationReply } from './aiService.ts';
-
-dotenv.config();
+import {
+  evaluateSession,
+  generateConversationReply,
+  generateInterviewStart,
+  generateInterviewTurn
+} from './aiService.ts';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
@@ -95,6 +98,33 @@ app.post('/api/conversation-reply', async (req, res) => {
   }
 });
 
+app.post('/api/interview/start', async (req, res) => {
+  try {
+    res.json(await generateInterviewStart({
+      role: req.body?.role || 'General',
+      customQuestions: Array.isArray(req.body?.customQuestions) ? req.body.customQuestions : []
+    }));
+  } catch (error) {
+    res.status(503).json({ error: (error as Error).message });
+  }
+});
+
+app.post('/api/interview/turn', async (req, res) => {
+  try {
+    res.json(await generateInterviewTurn({
+      role: req.body?.role || 'General',
+      question: req.body?.question || '',
+      answer: req.body?.answer || '',
+      history: Array.isArray(req.body?.history) ? req.body.history : [],
+      customQuestions: Array.isArray(req.body?.customQuestions) ? req.body.customQuestions : [],
+      askedQuestions: Array.isArray(req.body?.askedQuestions) ? req.body.askedQuestions : [],
+      isFollowUp: !!req.body?.isFollowUp
+    }));
+  } catch (error) {
+    res.status(503).json({ error: (error as Error).message });
+  }
+});
+
 app.post(
   '/api/transcribe',
   express.raw({ type: ['audio/*', 'application/octet-stream'], limit: '200mb' }),
@@ -172,7 +202,8 @@ function mapSession(row: any) {
     oneThingToPractice: row.one_thing_to_practice,
     mediaUrl: row.media_url || undefined,
     evaluationSource: row.evaluation_source || undefined,
-    wordTimings: row.word_timings_json ? JSON.parse(row.word_timings_json) : undefined
+    wordTimings: row.word_timings_json ? JSON.parse(row.word_timings_json) : undefined,
+    interviewQa: row.interview_qa_json ? JSON.parse(row.interview_qa_json) : undefined
   };
 }
 
@@ -329,8 +360,8 @@ app.post('/api/sessions', async (req, res) => {
         id, timestamp, mode, mode_label, duration_seconds, context_prompt, target_audience,
         transcript, score, utterances_json, metrics_json, replays_json, why_coaching_json,
         attempt_number, previous_attempt_id, deltas_json, one_thing_to_practice, media_url,
-        evaluation_source, word_timings_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        evaluation_source, word_timings_json, interview_qa_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       session.id,
       session.timestamp,
@@ -351,7 +382,8 @@ app.post('/api/sessions', async (req, res) => {
       session.oneThingToPractice,
       session.mediaUrl || null,
       session.evaluationSource || null,
-      session.wordTimings ? JSON.stringify(session.wordTimings) : null
+      session.wordTimings ? JSON.stringify(session.wordTimings) : null,
+      session.interviewQa ? JSON.stringify(session.interviewQa) : null
     ]);
     res.json({ success: true, id: session.id });
   } catch (error) {

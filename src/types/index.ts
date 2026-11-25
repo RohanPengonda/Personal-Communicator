@@ -111,6 +111,48 @@ export interface SessionDelta {
   endingImpactChangePct: number;
 }
 
+export interface WebSource {
+  title: string;
+  uri: string;
+}
+
+export type InterviewVerdict = 'strong' | 'partial' | 'weak';
+
+export interface InterviewQa {
+  question: string;
+  answer: string;
+  feedback: string;
+  verdict: InterviewVerdict;
+  modelAnswer: string;
+  score: number;
+  sources: WebSource[];
+}
+
+export interface InterviewTurnInput {
+  role: string;
+  question: string;
+  answer: string;
+  history: { speaker: 'AI' | 'USER'; text: string }[];
+  customQuestions: string[];
+  askedQuestions: string[];
+  isFollowUp: boolean;
+}
+
+export interface InterviewTurnResult {
+  feedback: string;
+  verdict: InterviewVerdict;
+  modelAnswer: string;
+  score: number;
+  followUp: string;
+  nextQuestion: string;
+  sources: WebSource[];
+}
+
+export interface InterviewStartResult {
+  question: string;
+  sources: WebSource[];
+}
+
 export interface Session {
   id: string;
   timestamp: string;
@@ -132,6 +174,7 @@ export interface Session {
   mediaUrl?: string;
   evaluationSource?: 'AI' | 'MOCK';
   wordTimings?: WordTiming[];
+  interviewQa?: InterviewQa[];
 }
 
 export interface SavedConversation {

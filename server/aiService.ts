@@ -1,16 +1,33 @@
-import { GoogleGenAI } from '@google/genai';
+import './env.ts';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import type {
   CommunicationMetrics,
   SessionReplayMarker,
   WhyCoachingCard,
   SessionDelta,
   Session,
-  WordTiming
+  WordTiming,
+  WebSource,
+  InterviewVerdict,
+  InterviewTurnInput,
+  InterviewTurnResult,
+  InterviewStartResult
 } from '../src/types/index.ts';
 
-// Server-side key: never exposed to the browser bundle.
+// Server-side keys: never exposed to the browser bundle.
 const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+
+const configuredOpenRouterKey = process.env.OPENROUTER_API_KEY || '';
+// OpenRouter keys start with "sk-or-". Ignore placeholders/typos so a valid
+// Gemini key can still be used as the provider.
+const openRouterKey = configuredOpenRouterKey.startsWith('sk-or-') ? configuredOpenRouterKey : '';
+const openRouterModel = process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free';
+const openRouterInterviewModel = process.env.OPENROUTER_INTERVIEW_MODEL ||
+  (openRouterModel.includes(':online') ? openRouterModel : `${openRouterModel}:online`);
+
+type AiProvider = 'openrouter' | 'gemini';
+const activeProvider: AiProvider | null = openRouterKey ? 'openrouter' : apiKey ? 'gemini' : null;
 
 export interface EvaluationInput {
   mode: 'LIVE_COACH' | 'CONVERSATION' | 'INTERVIEW';
@@ -32,14 +49,100 @@ export interface EvaluationResult {
   source: 'AI' | 'MOCK';
 }
 
-// Same prompt + same seed + temperature 0 = same score on every run, so the
-// Progress trend reflects real improvement instead of model variance.
-const DETERMINISTIC_CONFIG = {
-  temperature: 0,
-  topP: 1,
-  topK: 1,
-  seed: 20240101
-} as const;
+// Gemini 3.x removed temperature/topP/topK/seed; use low reasoning effort for
+// fast, consistent scoring and conversation replies.
+const GEMINI_CONFIG = { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } };
+
+function requireProvider(): AiProvider {
+  if (!activeProvider) {
+    throw new Error('No AI provider configured. Set OPENROUTER_API_KEY (recommended for web-grounded interviews) or GEMINI_API_KEY.');
+  }
+  return activeProvider;
+}
+
+// OpenRouter is OpenAI-compatible. Free model slugs work with an optional
+// `:online` suffix that adds web search results as URL citations.
+async function callOpenRouter(prompt: string, grounded: boolean): Promise<{ text: string; sources: WebSource[] }> {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${openRouterKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:3001',
+      'X-Title': 'Communication Coach'
+    },
+    body: JSON.stringify({
+      model: grounded ? openRouterInterviewModel : openRouterModel,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2000
+    }),
+    signal: AbortSignal.timeout(120000)
+  });
+
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 240);
+    throw new Error(`OpenRouter request failed (HTTP ${response.status}): ${body}`);
+  }
+
+  const data = await response.json() as any;
+  const text = String(data?.choices?.[0]?.message?.content || '');
+  const sources: WebSource[] = [];
+  if (grounded) {
+    const annotations: any[] = data?.choices?.[0]?.message?.annotations ?? [];
+    const seen = new Set<string>();
+    for (const annotation of annotations) {
+      const citation = annotation?.url_citation;
+      if (!citation?.url || seen.has(citation.url)) continue;
+      seen.add(citation.url);
+      let title = String(citation.title || '').trim();
+      if (!title) {
+        try {
+          title = new URL(citation.url).hostname.replace(/^www\./, '');
+        } catch {
+          title = 'web source';
+        }
+      }
+      sources.push({ title: title.slice(0, 160), uri: String(citation.url) });
+      if (sources.length >= 6) break;
+    }
+  }
+  return { text, sources };
+}
+
+async function callGemini(prompt: string, grounded: boolean): Promise<{ text: string; sources: WebSource[] }> {
+  if (!ai) throw new Error('GEMINI_API_KEY is not configured.');
+  const response = await ai.models.generateContent({
+    model: 'gemini-3.8-flash',
+    contents: prompt,
+    config: grounded ? GROUNDED_CONFIG : GEMINI_CONFIG
+  });
+  return { text: response.text || '', sources: grounded ? extractWebSources(response) : [] };
+}
+
+function friendlyProviderError(provider: AiProvider, error: unknown): Error {
+  const raw = (error as Error)?.message || String(error);
+  const label = provider === 'gemini' ? 'Gemini' : 'OpenRouter';
+
+  if (/RESOURCE_EXHAUSTED|quota|429/i.test(raw)) {
+    return new Error(`${label} quota exhausted. Wait for the quota to reset, use a different key, or configure a free alternative provider.`);
+  }
+  if (/NOT_FOUND|404|no longer available/i.test(raw)) {
+    return new Error(`${label} model is unavailable. Update the model name or use a currently supported model.`);
+  }
+  if (/401|403|API key|unauthorized|permission/i.test(raw)) {
+    return new Error(`${label} API key was rejected. Check the key in .env and restart the server.`);
+  }
+  return new Error(raw);
+}
+
+async function callProvider(prompt: string, grounded = false): Promise<{ text: string; sources: WebSource[] }> {
+  const provider = requireProvider();
+  try {
+    return provider === 'openrouter' ? await callOpenRouter(prompt, grounded) : await callGemini(prompt, grounded);
+  } catch (error) {
+    throw friendlyProviderError(provider, error);
+  }
+}
 
 const clamp = (value: number, min = 1, max = 10) => Math.max(min, Math.min(max, value));
 const round1 = (value: number) => Math.round(value * 10) / 10;
@@ -198,12 +301,7 @@ Return ONLY a raw JSON object with this exact structure:
 }
 `;
 
-  const response = await ai!.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: prompt,
-    config: DETERMINISTIC_CONFIG
-  });
-  const text = response.text || '';
+  const { text } = await callProvider(prompt);
   const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
   const parsed = JSON.parse(cleanJson);
 
@@ -417,7 +515,7 @@ export async function generateConversationReply(
   transcript: string,
   history: { speaker: string; text: string }[]
 ): Promise<string> {
-  if (ai) {
+  if (activeProvider) {
     try {
       const prompt = [
         'You are a warm, thoughtful communication coach having a natural spoken conversation.',
@@ -426,15 +524,10 @@ export async function generateConversationReply(
         ...history.slice(-8).map((item) => `${item.speaker}: ${item.text}`),
         `User: ${transcript}`
       ].join('\n');
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: DETERMINISTIC_CONFIG
-      });
-      const reply = response.text?.trim();
-      if (reply) return reply;
+      const { text } = await callProvider(prompt);
+      if (text.trim()) return text.trim();
     } catch (error) {
-      console.warn('Gemini conversation reply failed, using local reply:', (error as Error).message);
+      console.warn('AI conversation reply failed, using local reply:', (error as Error).message);
     }
   }
 
@@ -447,4 +540,147 @@ export async function generateConversationReply(
     return 'What part of that situation felt most important to you?';
   }
   return 'I understand. Could you tell me a little more about what happened and how you handled it?';
+}
+
+// ---------------------------------------------------------------------------
+// Web-grounded interview Q&A
+// ---------------------------------------------------------------------------
+
+// Gemini needs this tool enabled explicitly for web grounding. On the free
+// tier Google Search grounding is unavailable; OpenRouter's `:online` model
+// variant is the recommended path for web-sourced interviews.
+const GROUNDED_CONFIG = { tools: [{ googleSearch: {} }] };
+
+function parseJsonObject<T>(text: string): T {
+  const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('AI returned an invalid JSON response');
+  return JSON.parse(cleaned.slice(start, end + 1)) as T;
+}
+
+function extractWebSources(response: any): WebSource[] {
+  const chunks: any[] = response?.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+  const seen = new Set<string>();
+  const sources: WebSource[] = [];
+
+  for (const chunk of chunks) {
+    const web = chunk?.web;
+    if (!web?.uri || seen.has(web.uri)) continue;
+    seen.add(web.uri);
+    let host = '';
+    try {
+      host = new URL(web.uri).hostname.replace(/^www\./, '');
+    } catch {
+      host = 'web source';
+    }
+    sources.push({
+      title: String(web.title || host).slice(0, 160),
+      uri: String(web.uri)
+    });
+    if (sources.length >= 6) break;
+  }
+
+  return sources;
+}
+
+function cleanList(items: string[] | undefined, limit = 30): string[] {
+  return (items ?? [])
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function questionPlan(customQuestions: string[], askedQuestions: string[]): string {
+  if (!customQuestions.length) {
+    return 'The user did not provide questions. Invent a fresh, role-relevant question that has not been asked yet.';
+  }
+  const remaining = customQuestions.filter((question) => !askedQuestions.includes(question));
+  if (remaining.length) {
+    return `The user provided these questions. Ask the FIRST unasked one verbatim: ${JSON.stringify(remaining)}`;
+  }
+  return 'All user-provided questions have been asked. Invent one fresh role-relevant follow-up question.';
+}
+
+export async function generateInterviewStart(input: {
+  role: string;
+  customQuestions: string[];
+}): Promise<InterviewStartResult> {
+  requireProvider();
+  const role = String(input.role || 'General').trim();
+  const customQuestions = cleanList(input.customQuestions);
+
+  const prompt = [
+    'You are a senior interviewer running a realistic spoken mock interview.',
+    `Target role: ${role}`,
+    questionPlan(customQuestions, []),
+    'Ask exactly ONE question. Keep it specific, realistic and answerable in 1-2 minutes.',
+    'Do not answer the question. Do not add any preamble or options.',
+    'Return ONLY a raw JSON object: {"question":"the single question"}'
+  ].join('\n');
+
+  const { text, sources } = await callProvider(prompt, true);
+  const parsed = parseJsonObject<{ question?: string }>(text);
+  const question = String(parsed.question || '').trim();
+  if (!question) throw new Error('Interview question generation returned an empty result');
+
+  return { question, sources };
+}
+
+export async function generateInterviewTurn(input: InterviewTurnInput): Promise<InterviewTurnResult> {
+  requireProvider();
+  const role = String(input.role || 'General').trim();
+  const question = String(input.question || '').trim();
+  const answer = String(input.answer || '').trim();
+  const customQuestions = cleanList(input.customQuestions);
+  const askedQuestions = cleanList(input.askedQuestions, 60);
+  const history = (input.history ?? [])
+    .slice(-12)
+    .map((item) => `${item.speaker}: ${String(item.text).slice(0, 400)}`)
+    .join('\n');
+
+  if (!answer) throw new Error('No answer was provided');
+
+  const prompt = [
+    'You are a senior interviewer AND a blunt-but-supportive communication coach.',
+    `Target role: ${role}`,
+    `Question you just asked: "${question}"`,
+    `Candidate's spoken answer: "${answer}"`,
+    `Conversation so far:\n${history || '(none yet)'}`,
+    questionPlan(customQuestions, askedQuestions),
+    input.isFollowUp
+      ? 'This answer was for a follow-up question. Do NOT ask another follow-up.'
+      : 'If the answer has a clear gap, ask ONE short follow-up that probes it. Otherwise leave followUp empty.',
+    'Use current web-grounded interview standards for this role. Be accurate and fair.',
+    'Return ONLY a raw JSON object with this exact shape:',
+    JSON.stringify({
+      feedback: '2-3 sentences: what was good and what was missing or wrong',
+      verdict: 'strong | partial | weak',
+      modelAnswer: '3-5 sentence accurate model answer a strong candidate would give',
+      score: 8,
+      followUp: 'one short probing question, or empty string',
+      nextQuestion: 'the next distinct interview question'
+    }),
+    'Do not include markdown or commentary outside the JSON.'
+  ].join('\n');
+
+  const { text, sources } = await callProvider(prompt, true);
+  const parsed = parseJsonObject<Record<string, unknown>>(text);
+  const verdictValue = String(parsed.verdict || 'partial').toLowerCase();
+  const verdict: InterviewVerdict = verdictValue === 'strong' || verdictValue === 'weak'
+    ? verdictValue
+    : 'partial';
+  const rawScore = Number(parsed.score);
+  const score = Number.isFinite(rawScore) ? clamp(round1(rawScore)) : 6;
+
+  return {
+    feedback: String(parsed.feedback || '').trim() || 'Review the model answer below for a stronger response.',
+    verdict,
+    modelAnswer: String(parsed.modelAnswer || '').trim() || 'Keep your answer specific and support it with a concrete example.',
+    score,
+    followUp: String(parsed.followUp || '').trim(),
+    nextQuestion: String(parsed.nextQuestion || '').trim() ||
+      'Tell me about a recent example that proves you are a strong fit for this role.',
+    sources
+  };
 }

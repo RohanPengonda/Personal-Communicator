@@ -36,7 +36,8 @@ export async function initDatabase() {
       one_thing_to_practice TEXT NOT NULL,
       media_url TEXT,
       evaluation_source TEXT,
-      word_timings_json TEXT
+      word_timings_json TEXT,
+      interview_qa_json TEXT
     );
   `);
 
@@ -50,6 +51,9 @@ export async function initDatabase() {
   }
   if (!columns.some((column: any) => column.name === 'word_timings_json')) {
     await db.exec('ALTER TABLE sessions ADD COLUMN word_timings_json TEXT');
+  }
+  if (!columns.some((column: any) => column.name === 'interview_qa_json')) {
+    await db.exec('ALTER TABLE sessions ADD COLUMN interview_qa_json TEXT');
   }
 
   await db.exec(`

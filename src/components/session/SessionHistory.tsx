@@ -3,6 +3,7 @@ import type { SessionPage, SessionQuery, TrainingMode } from '../../types';
 import { api } from '../../services/api';
 import { exportRecording, exportSessionJson, exportTranscript } from '../../services/exportService';
 import { withAuth } from '../../services/auth';
+import { InterviewReview } from './InterviewReview';
 import {
   History,
   Video,
@@ -278,6 +279,8 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({ onPractice }) =>
                   ))}
                 </div>
               )}
+
+              <InterviewReview session={selected} />
 
               <div className="session-detail-actions">
                 {selected.mediaUrl && (

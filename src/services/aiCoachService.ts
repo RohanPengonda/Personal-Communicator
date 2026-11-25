@@ -5,9 +5,13 @@ import type {
   WhyCoachingCard,
   SessionDelta,
   Session,
-  WordTiming
+  WordTiming,
+  InterviewTurnInput,
+  InterviewTurnResult,
+  InterviewStartResult
 } from '../types';
 import { API_BASE } from './api';
+import { authHeaders, clearPasscode, UNAUTHORIZED_EVENT } from './auth';
 
 export interface EvaluationInput {
   mode: TrainingMode;
@@ -30,12 +34,34 @@ export interface EvaluationResult {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body)
+    });
+  } catch {
+    throw new Error(`Cannot reach the API server at ${API_BASE}. Start the server, then try again.`);
+  }
+
+  if (response.status === 401) {
+    clearPasscode();
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw new Error('Passcode required. Please unlock the app again.');
+  }
+
+  if (!response.ok) {
+    let detail = '';
+    try {
+      const data = await response.json() as { error?: string };
+      detail = data?.error || '';
+    } catch {
+      // Keep the HTTP status as the fallback message.
+    }
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+
   return response.json() as Promise<T>;
 }
 
@@ -46,6 +72,17 @@ export async function evaluateSession(input: EvaluationInput): Promise<Evaluatio
     console.warn('Evaluation API unavailable, using minimal local fallback:', error);
     return localFallback(input);
   }
+}
+
+export async function startInterview(input: {
+  role: string;
+  customQuestions: string[];
+}): Promise<InterviewStartResult> {
+  return post<InterviewStartResult>('/interview/start', input);
+}
+
+export async function answerInterview(input: InterviewTurnInput): Promise<InterviewTurnResult> {
+  return post<InterviewTurnResult>('/interview/turn', input);
 }
 
 export async function generateConversationReply(

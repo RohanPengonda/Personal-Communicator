@@ -3,6 +3,7 @@ import type { Session } from '../../types';
 import { RotateCcw, CheckCircle2, Target, Download, FileText, FileJson } from 'lucide-react';
 import { exportRecording, exportSessionJson, exportTranscript } from '../../services/exportService';
 import { withAuth } from '../../services/auth';
+import { InterviewReview } from './InterviewReview';
 
 interface SessionCompleteProps {
   session: Session;
@@ -109,6 +110,8 @@ export const SessionComplete: React.FC<SessionCompleteProps> = ({
           ))}
         </section>
       )}
+
+      <InterviewReview session={session} />
 
       <footer className="result-actions">
         <div className="result-export">
