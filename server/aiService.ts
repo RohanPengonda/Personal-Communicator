@@ -22,12 +22,20 @@ const configuredOpenRouterKey = process.env.OPENROUTER_API_KEY || '';
 // OpenRouter keys start with "sk-or-". Ignore placeholders/typos so a valid
 // Gemini key can still be used as the provider.
 const openRouterKey = configuredOpenRouterKey.startsWith('sk-or-') ? configuredOpenRouterKey : '';
-const openRouterModel = process.env.OPENROUTER_MODEL || 'google/gemma-4-31b-it:free';
+// `openrouter/free` routes to an available free model instead of pinning one
+// provider pool that is frequently rate-limited. Override with OPENROUTER_MODEL.
+const openRouterModel = process.env.OPENROUTER_MODEL || 'openrouter/free';
 const openRouterInterviewModel = process.env.OPENROUTER_INTERVIEW_MODEL ||
   (openRouterModel.includes(':online') ? openRouterModel : `${openRouterModel}:online`);
 
-type AiProvider = 'openrouter' | 'gemini';
-const activeProvider: AiProvider | null = openRouterKey ? 'openrouter' : apiKey ? 'gemini' : null;
+type AiProvider = 'gemini' | 'openrouter';
+// Gemini is preferred. If it fails (quota, model error, or unusable response),
+// the same request is retried with OpenRouter. Without a Gemini key, OpenRouter
+// becomes the primary provider.
+const activeProviders: AiProvider[] = [
+  ...(apiKey ? (['gemini'] as AiProvider[]) : []),
+  ...(openRouterKey ? (['openrouter'] as AiProvider[]) : [])
+];
 
 export interface EvaluationInput {
   mode: 'LIVE_COACH' | 'CONVERSATION' | 'INTERVIEW';
@@ -53,11 +61,11 @@ export interface EvaluationResult {
 // fast, consistent scoring and conversation replies.
 const GEMINI_CONFIG = { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } };
 
-function requireProvider(): AiProvider {
-  if (!activeProvider) {
-    throw new Error('No AI provider configured. Set OPENROUTER_API_KEY (recommended for web-grounded interviews) or GEMINI_API_KEY.');
+function requireProviders(): AiProvider[] {
+  if (!activeProviders.length) {
+    throw new Error('No AI provider configured. Set GEMINI_API_KEY, OPENROUTER_API_KEY, or both.');
   }
-  return activeProvider;
+  return activeProviders;
 }
 
 // OpenRouter is OpenAI-compatible. Free model slugs work with an optional
@@ -119,29 +127,81 @@ async function callGemini(prompt: string, grounded: boolean): Promise<{ text: st
   return { text: response.text || '', sources: grounded ? extractWebSources(response) : [] };
 }
 
-function friendlyProviderError(provider: AiProvider, error: unknown): Error {
-  const raw = (error as Error)?.message || String(error);
-  const label = provider === 'gemini' ? 'Gemini' : 'OpenRouter';
+type ProviderResult = { text: string; sources: WebSource[] };
 
-  if (/RESOURCE_EXHAUSTED|quota|429/i.test(raw)) {
-    return new Error(`${label} quota exhausted. Wait for the quota to reset, use a different key, or configure a free alternative provider.`);
-  }
-  if (/NOT_FOUND|404|no longer available/i.test(raw)) {
-    return new Error(`${label} model is unavailable. Update the model name or use a currently supported model.`);
-  }
-  if (/401|403|API key|unauthorized|permission/i.test(raw)) {
-    return new Error(`${label} API key was rejected. Check the key in .env and restart the server.`);
-  }
-  return new Error(raw);
+const providerCalls: Record<AiProvider, (prompt: string, grounded: boolean) => Promise<ProviderResult>> = {
+  gemini: callGemini,
+  openrouter: callOpenRouter
+};
+
+function providerLabel(provider: AiProvider): string {
+  return provider === 'gemini' ? 'Gemini' : 'OpenRouter';
 }
 
-async function callProvider(prompt: string, grounded = false): Promise<{ text: string; sources: WebSource[] }> {
-  const provider = requireProvider();
-  try {
-    return provider === 'openrouter' ? await callOpenRouter(prompt, grounded) : await callGemini(prompt, grounded);
-  } catch (error) {
-    throw friendlyProviderError(provider, error);
+function friendlyProviderMessage(provider: AiProvider, error: unknown): string {
+  const raw = (error as Error)?.message || String(error);
+  const label = providerLabel(provider);
+
+  if (/RESOURCE_EXHAUSTED|quota|429|rate.limit/i.test(raw)) {
+    return `${label} quota exhausted or rate-limited.`;
   }
+  if (/NOT_FOUND|404|no longer available/i.test(raw)) {
+    return `${label} model is unavailable. Update the model name or use a currently supported model.`;
+  }
+  if (/401|403|API key|unauthorized|permission/i.test(raw)) {
+    return `${label} API key was rejected. Check the key in .env and restart the server.`;
+  }
+  return raw;
+}
+
+function providerAttempts(grounded: boolean): { provider: AiProvider; grounded: boolean }[] {
+  const providers = requireProviders();
+  const attempts = providers.map((provider) => ({ provider, grounded }));
+  if (!grounded || providers.length < 2) return attempts;
+
+  // If web grounding itself fails (for example, Gemini Search requires a paid
+  // tier), retry each provider without grounding so the interview still runs.
+  return [...attempts, ...providers.map((provider) => ({ provider, grounded: false }))];
+}
+
+async function callProviderWith<T>(
+  prompt: string,
+  grounded: boolean,
+  parse: (text: string) => T
+): Promise<{ data: T; sources: WebSource[]; provider: AiProvider; grounded: boolean }> {
+  const attempts = providerAttempts(grounded);
+  const failures: string[] = [];
+
+  for (const attempt of attempts) {
+    const label = providerLabel(attempt.provider);
+    try {
+      const result = await providerCalls[attempt.provider](prompt, attempt.grounded);
+      if (!result.text.trim()) throw new Error(`${label} returned an empty response`);
+      const data = parse(result.text);
+      return { data, sources: result.sources, provider: attempt.provider, grounded: attempt.grounded };
+    } catch (error) {
+      const message = friendlyProviderMessage(attempt.provider, error);
+      failures.push(`${label}${attempt.grounded ? ' (web-grounded)' : ''}: ${message}`);
+      if (attempts.length > 1) console.warn(`[ai] ${message} Trying next provider.`);
+    }
+  }
+
+  if (failures.length === 1) throw new Error(failures[0]);
+  throw new Error(`All AI attempts failed. ${failures.join(' | ')}`);
+}
+
+async function callProvider(
+  prompt: string,
+  grounded = false
+): Promise<{ text: string; sources: WebSource[]; provider: AiProvider; grounded: boolean }> {
+  return callProviderWith(prompt, grounded, (text) => text);
+}
+
+async function callProviderJson<T>(
+  prompt: string,
+  grounded = false
+): Promise<{ data: T; sources: WebSource[]; provider: AiProvider; grounded: boolean }> {
+  return callProviderWith(prompt, grounded, (text) => parseJsonObject<T>(text));
 }
 
 const clamp = (value: number, min = 1, max = 10) => Math.max(min, Math.min(max, value));
@@ -233,11 +293,11 @@ export function alignReplays(markers: SessionReplayMarker[], transcript: string,
 
 export async function evaluateSession(input: EvaluationInput): Promise<EvaluationResult> {
   let result: EvaluationResult;
-  if (ai) {
+  if (activeProviders.length) {
     try {
-      result = await evaluateWithGemini(input);
+      result = await evaluateWithAi(input);
     } catch (error) {
-      console.warn('Gemini evaluation failed, using local mock engine:', (error as Error).message);
+      console.warn('AI evaluation failed, using local mock engine:', (error as Error).message);
       result = generateIntelligentMockEvaluation(input);
     }
   } else {
@@ -247,7 +307,7 @@ export async function evaluateSession(input: EvaluationInput): Promise<Evaluatio
   return { ...result, replays: alignReplays(result.replays, input.transcript, input.wordTimings ?? []) };
 }
 
-async function evaluateWithGemini(input: EvaluationInput): Promise<EvaluationResult> {
+async function evaluateWithAi(input: EvaluationInput): Promise<EvaluationResult> {
   const prompt = `
 You are a world-class long-term Personal AI Communication Coach.
 Evaluate this user communication session with high standards (brutally honest + supportive).
@@ -301,9 +361,7 @@ Return ONLY a raw JSON object with this exact structure:
 }
 `;
 
-  const { text } = await callProvider(prompt);
-  const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-  const parsed = JSON.parse(cleanJson);
+  const { data: parsed } = await callProviderJson<any>(prompt);
 
   if (input.previousAttemptSession) {
     parsed.deltas = calculateDeltas(parsed, input.previousAttemptSession);
@@ -515,7 +573,7 @@ export async function generateConversationReply(
   transcript: string,
   history: { speaker: string; text: string }[]
 ): Promise<string> {
-  if (activeProvider) {
+  if (activeProviders.length) {
     try {
       const prompt = [
         'You are a warm, thoughtful communication coach having a natural spoken conversation.',
@@ -606,7 +664,7 @@ export async function generateInterviewStart(input: {
   role: string;
   customQuestions: string[];
 }): Promise<InterviewStartResult> {
-  requireProvider();
+  requireProviders();
   const role = String(input.role || 'General').trim();
   const customQuestions = cleanList(input.customQuestions);
 
@@ -619,8 +677,7 @@ export async function generateInterviewStart(input: {
     'Return ONLY a raw JSON object: {"question":"the single question"}'
   ].join('\n');
 
-  const { text, sources } = await callProvider(prompt, true);
-  const parsed = parseJsonObject<{ question?: string }>(text);
+  const { data: parsed, sources } = await callProviderJson<{ question?: string }>(prompt, true);
   const question = String(parsed.question || '').trim();
   if (!question) throw new Error('Interview question generation returned an empty result');
 
@@ -628,7 +685,7 @@ export async function generateInterviewStart(input: {
 }
 
 export async function generateInterviewTurn(input: InterviewTurnInput): Promise<InterviewTurnResult> {
-  requireProvider();
+  requireProviders();
   const role = String(input.role || 'General').trim();
   const question = String(input.question || '').trim();
   const answer = String(input.answer || '').trim();
@@ -664,8 +721,7 @@ export async function generateInterviewTurn(input: InterviewTurnInput): Promise<
     'Do not include markdown or commentary outside the JSON.'
   ].join('\n');
 
-  const { text, sources } = await callProvider(prompt, true);
-  const parsed = parseJsonObject<Record<string, unknown>>(text);
+  const { data: parsed, sources } = await callProviderJson<Record<string, unknown>>(prompt, true);
   const verdictValue = String(parsed.verdict || 'partial').toLowerCase();
   const verdict: InterviewVerdict = verdictValue === 'strong' || verdictValue === 'weak'
     ? verdictValue
