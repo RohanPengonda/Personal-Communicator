@@ -13,6 +13,8 @@ import type {
 import { API_BASE } from './api';
 import { authHeaders, clearPasscode, UNAUTHORIZED_EVENT } from './auth';
 
+const REQUEST_TIMEOUT_MS = 100000;
+
 export interface EvaluationInput {
   mode: TrainingMode;
   contextPrompt: string;
@@ -39,9 +41,14 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     response = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+    if (/timeout|abort/i.test(message)) {
+      throw new Error('The AI request timed out. Try again, or check the AI provider in Settings.');
+    }
     throw new Error(`Cannot reach the API server at ${API_BASE}. Start the server, then try again.`);
   }
 
