@@ -18,7 +18,6 @@ const HOST = process.env.HOST || '127.0.0.1';
 const recordingsDir = path.resolve(process.cwd(), 'recordings');
 const distDir = path.resolve(process.cwd(), 'dist');
 const retentionDays = Number(process.env.RECORDING_RETENTION_DAYS || 30);
-const whisperUrl = process.env.WHISPER_URL || 'http://localhost:8080/inference';
 const appPasscode = process.env.APP_PASSCODE || '';
 
 app.use(cors());
@@ -124,38 +123,6 @@ app.post('/api/interview/turn', async (req, res) => {
     res.status(503).json({ error: (error as Error).message });
   }
 });
-
-app.post(
-  '/api/transcribe',
-  express.raw({ type: ['audio/*', 'application/octet-stream'], limit: '200mb' }),
-  async (req, res) => {
-    try {
-      if (!Buffer.isBuffer(req.body)) {
-        res.status(400).json({ error: 'Invalid audio payload' });
-        return;
-      }
-      const response = await fetch(whisperUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': String(req.headers['content-type'] || 'audio/webm') },
-        body: new Uint8Array(req.body),
-        signal: AbortSignal.timeout(120000)
-      });
-      if (!response.ok) throw new Error(`Whisper service returned HTTP ${response.status}`);
-      const data = await response.json() as any;
-      const rawWords: any[] = data.words ?? data.segments?.flatMap((segment: any) => segment.words ?? []) ?? [];
-      const wordTimings = rawWords
-        .map((word) => ({
-          word: String(word.word ?? word.text ?? '').trim(),
-          start: Number(word.start ?? 0),
-          end: Number(word.end ?? 0)
-        }))
-        .filter((word) => word.word.length > 0);
-      res.json({ text: String(data.text ?? ''), wordTimings });
-    } catch (error) {
-      res.status(503).json({ error: `Local transcription unavailable: ${(error as Error).message}` });
-    }
-  }
-);
 
 app.get('/api/storage', async (_req, res) => {
   try {

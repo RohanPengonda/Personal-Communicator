@@ -66,11 +66,6 @@ export interface WordTiming {
   end: number;
 }
 
-export interface TranscriptionResult {
-  text: string;
-  wordTimings: WordTiming[];
-}
-
 export interface SessionReplayMarker {
   id: string;
   timestampSeconds: number;

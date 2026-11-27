@@ -9,13 +9,11 @@ import { Video, Mic, Square, Sparkles, Activity, AlertCircle, Eye } from 'lucide
 interface LiveCoachModeProps {
   onSessionComplete: (session: Session) => void;
   previousAttemptSession?: Session | null;
-  offlineMode: boolean;
 }
 
 export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   onSessionComplete,
-  previousAttemptSession,
-  offlineMode
+  previousAttemptSession
 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -27,7 +25,6 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [noSpeech, setNoSpeech] = useState(false);
-  const [transcriptionError, setTranscriptionError] = useState('');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -70,7 +67,6 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     setPaceWpm(0);
     setTimerSeconds(0);
     setNoSpeech(false);
-    setTranscriptionError('');
     wordTimingsRef.current = [];
     setIsRecording(true);
 
@@ -79,25 +75,23 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
       if (recorder.start(streamRef.current)) recorderRef.current = recorder;
     }
 
-    if (!offlineMode) {
-      const tracker = new SpeechTracker({
-        onTranscriptUpdate: (full, interim) => {
-          setTranscript(full);
-          setInterimText(interim);
-        },
-        onVolumeChange: (vol) => setVolume(vol),
-        onPaceUpdate: (wpm) => setPaceWpm(wpm),
-        onFillerDetected: (count, _word) => {
-          setFillerCount(count);
-        },
-        onWordTimings: (timings) => {
-          wordTimingsRef.current = timings;
-        }
-      });
+    const tracker = new SpeechTracker({
+      onTranscriptUpdate: (full, interim) => {
+        setTranscript(full);
+        setInterimText(interim);
+      },
+      onVolumeChange: (vol) => setVolume(vol),
+      onPaceUpdate: (wpm) => setPaceWpm(wpm),
+      onFillerDetected: (count, _word) => {
+        setFillerCount(count);
+      },
+      onWordTimings: (timings) => {
+        wordTimingsRef.current = timings;
+      }
+    });
 
-      speechTrackerRef.current = tracker;
-      await tracker.start(streamRef.current ?? undefined);
-    }
+    speechTrackerRef.current = tracker;
+    await tracker.start(streamRef.current ?? undefined);
 
     timerRef.current = setInterval(() => {
       setTimerSeconds((prev) => prev + 1);
@@ -114,25 +108,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
     const recording = await (recorderRef.current?.stop() ?? Promise.resolve(null));
     const sessionId = `sess-${crypto.randomUUID()}`;
 
-    let finalTranscript = (transcript + ' ' + interimText).trim();
-    let wordTimings: WordTiming[] = [];
-
-    if (offlineMode) {
-      if (!recording) {
-        setTranscriptionError('No audio was recorded. Check your microphone and try again.');
-        return;
-      }
-      try {
-        const transcription = await api.transcribeAudio(recording);
-        finalTranscript = transcription.text.trim();
-        wordTimings = transcription.wordTimings;
-      } catch {
-        setTranscriptionError('Local transcription unavailable. Start your Whisper service and try again.');
-        return;
-      }
-    } else {
-      wordTimings = wordTimingsRef.current;
-    }
+    const finalTranscript = (transcript + ' ' + interimText).trim();
+    const wordTimings: WordTiming[] = wordTimingsRef.current;
 
     if (!finalTranscript) {
       setNoSpeech(true);
@@ -241,12 +218,8 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
               <div><span>Speaking pace</span><strong>{paceWpm || 140}</strong></div>
             </div>
             <div className="live-transcript">
-              <span>{offlineMode ? 'Local transcription' : 'Live transcript'}</span>
-              <p>
-                {offlineMode
-                  ? 'Offline mode: your transcript and real coaching markers appear after you finish.'
-                  : <>{transcript} <mark>{interimText}</mark></>}
-              </p>
+              <span>Live transcript</span>
+              <p>{transcript} <mark>{interimText}</mark></p>
             </div>
           </div>
           {!isRecording ? (
@@ -263,12 +236,6 @@ export const LiveCoachMode: React.FC<LiveCoachModeProps> = ({
             <div className="no-speech">
               <AlertCircle className="w-4 h-4" />
               <span>No speech detected. Nothing was analyzed — press start to try again.</span>
-            </div>
-          )}
-          {transcriptionError && (
-            <div className="no-speech">
-              <AlertCircle className="w-4 h-4" />
-              <span>{transcriptionError}</span>
             </div>
           )}
         </aside>

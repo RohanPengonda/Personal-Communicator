@@ -8,13 +8,11 @@ import { SessionHistory } from './components/session/SessionHistory';
 import { ProgressDashboard } from './components/session/ProgressDashboard';
 import { api } from './services/api';
 import { clearPasscode, getPasscode, setPasscode, UNAUTHORIZED_EVENT } from './services/auth';
-import { getOfflineMode, setOfflineMode } from './services/settings';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('LIVE_COACH');
   const [completedSession, setCompletedSession] = useState<Session | null>(null);
   const [activeMode, setActiveMode] = useState<TrainingMode | null>('LIVE_COACH');
-  const [offlineMode, setOfflineModeState] = useState(getOfflineMode);
   const [lastSessions, setLastSessions] = useState<Partial<Record<TrainingMode, Session>>>({});
   const [needsLogin, setNeedsLogin] = useState(false);
   const [authEpoch, setAuthEpoch] = useState(0);
@@ -33,13 +31,6 @@ export const App: React.FC = () => {
       setLastSessions(items as Partial<Record<TrainingMode, Session>>);
     });
   }, [authEpoch]);
-
-  const toggleOffline = () => {
-    setOfflineModeState((current) => {
-      setOfflineMode(!current);
-      return !current;
-    });
-  };
 
   const selectTab = (tab: ActiveTab) => {
     setCompletedSession(null);
@@ -71,8 +62,6 @@ export const App: React.FC = () => {
       <Navbar
         activeTab={activeTab}
         setActiveTab={selectTab}
-        offlineMode={offlineMode}
-        onToggleOffline={toggleOffline}
         onLock={handleLock}
       />
 
@@ -93,7 +82,6 @@ export const App: React.FC = () => {
             onClearActiveMode={() => setActiveMode(null)}
             onSessionComplete={handleSessionComplete}
             previousAttemptSession={activeMode ? lastSessions[activeMode] ?? null : null}
-            offlineMode={offlineMode}
           />
         )}
       </main>

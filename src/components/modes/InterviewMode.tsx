@@ -55,10 +55,9 @@ interface ChatItem {
 interface Props {
   onSessionComplete: (session: Session) => void;
   previousAttemptSession?: Session | null;
-  offlineMode: boolean;
 }
 
-export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAttemptSession, offlineMode }) => {
+export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAttemptSession }) => {
   const [selectedRole, setSelectedRole] = useState(ROLES[0]);
   const [setupText, setSetupText] = useState('');
   const [phase, setPhase] = useState<'setup' | 'chat'>('setup');
@@ -517,14 +516,10 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAtte
         <Award className="practice-header-icon" />
       </header>
 
-      {(offlineMode || !hasSpeechSupport) && (
+      {!hasSpeechSupport && (
         <div className="interview-notice">
           <AlertCircle className="w-5 h-5" />
-          <span>
-            {offlineMode
-              ? 'Web-grounded interviews need Online mode. Turn Offline mode off in the header to start.'
-              : 'This browser has no speech recognition. Use Chrome or Edge for voice answers.'}
-          </span>
+          <span>This browser has no speech recognition. Use Chrome or Edge for voice answers.</span>
         </div>
       )}
 
@@ -582,7 +577,7 @@ export const InterviewMode: React.FC<Props> = ({ onSessionComplete, previousAtte
               <button
                 onClick={() => void handleStart()}
                 className="primary-action"
-                disabled={offlineMode || !hasSpeechSupport || isThinking}
+                disabled={!hasSpeechSupport || isThinking}
               >
                 <Send className="w-4 h-4" /> Start interview
               </button>

@@ -4,7 +4,6 @@ import type {
   SessionPage,
   SessionQuery,
   ProgressStats,
-  TranscriptionResult,
   TrainingMode
 } from '../types';
 import { authHeaders, clearPasscode, UNAUTHORIZED_EVENT } from './auth';
@@ -68,16 +67,6 @@ export const api = {
 
   getProgressStats: () =>
     request<ProgressStats>('/sessions/stats').then((stats) => stats ?? EMPTY_STATS),
-
-  transcribeAudio: async (blob: Blob) => {
-    const result = await request<TranscriptionResult>('/transcribe', {
-      method: 'POST',
-      headers: { 'Content-Type': blob.type || 'audio/webm' },
-      body: blob
-    });
-    if (!result) throw new Error('Local transcription unavailable');
-    return result;
-  },
 
   uploadRecording: async (sessionId: string, blob: Blob) => {
     const result = await request<{ success: boolean; url: string }>(

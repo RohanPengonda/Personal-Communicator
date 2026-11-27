@@ -9,21 +9,18 @@ interface ModesHubProps {
   activeMode: TrainingMode | null;
   onClearActiveMode: () => void;
   previousAttemptSession?: Session | null;
-  offlineMode: boolean;
 }
 
 export const ModesHub: React.FC<ModesHubProps> = ({
   activeMode,
   onSessionComplete,
-  previousAttemptSession,
-  offlineMode
+  previousAttemptSession
 }) => {
   if (activeMode === 'CONVERSATION') {
     return (
       <ConversationMode
         onSessionComplete={onSessionComplete}
         previousAttemptSession={previousAttemptSession}
-        offlineMode={offlineMode}
       />
     );
   }
@@ -33,7 +30,6 @@ export const ModesHub: React.FC<ModesHubProps> = ({
       <InterviewMode
         onSessionComplete={onSessionComplete}
         previousAttemptSession={previousAttemptSession}
-        offlineMode={offlineMode}
       />
     );
   }
@@ -42,7 +38,6 @@ export const ModesHub: React.FC<ModesHubProps> = ({
     <LiveCoachMode
       onSessionComplete={onSessionComplete}
       previousAttemptSession={previousAttemptSession}
-      offlineMode={offlineMode}
     />
   );
 };

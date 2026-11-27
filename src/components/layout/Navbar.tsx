@@ -1,13 +1,11 @@
 import React from 'react';
-import { MessageSquare, Mic2, BriefcaseBusiness, History, TrendingUp, Cloud, CloudOff, Lock } from 'lucide-react';
+import { MessageSquare, Mic2, BriefcaseBusiness, History, TrendingUp, Lock } from 'lucide-react';
 
 export type ActiveTab = 'LIVE_COACH' | 'CONVERSATION' | 'INTERVIEW' | 'HISTORY' | 'PROGRESS';
 
 interface NavbarProps {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
-  offlineMode: boolean;
-  onToggleOffline: () => void;
   onLock: () => void;
 }
 
@@ -19,7 +17,7 @@ const tabs = [
   { id: 'PROGRESS' as const, label: 'Progress', icon: TrendingUp }
 ];
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, offlineMode, onToggleOffline, onLock }) => (
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, onLock }) => (
   <header className="app-header">
     <div className="app-header-inner">
       <div className="flex items-center gap-3 shrink-0">
@@ -46,16 +44,6 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, offline
             </button>
           ))}
         </nav>
-        <button
-          onClick={onToggleOffline}
-          title={offlineMode ? 'Offline mode: local Whisper transcription' : 'Online mode: browser speech recognition'}
-          className={`flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-semibold transition-colors ${
-            offlineMode ? 'bg-emerald-500 text-surface-950' : 'text-slate-300 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          {offlineMode ? <CloudOff className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}
-          <span className="hidden lg:inline">{offlineMode ? 'Offline' : 'Online'}</span>
-        </button>
         <button
           onClick={onLock}
           title="Lock the app (clear saved passcode)"
